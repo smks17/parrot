@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"path"
 	"sort"
 	"strings"
 )
@@ -220,20 +221,28 @@ func (f *VFS) Remove(path string, recursive bool) error {
 	return nil
 }
 
+func (f *VFS) destination(src, dst string) (parent *Node, name string, err error) {
+	if dstNode, err := f.Resolve(dst); err == nil && dstNode.IsDir {
+		return dstNode, path.Base(strings.TrimRight(src, "/")), nil
+	}
+	return f.splitParent(dst)
+}
+
 func (f *VFS) Copy(src, dst string, recursive bool) error {
 	srcNode, err := f.Resolve(src)
 	if err != nil {
 		return ErrNotExist
 	}
-	dstNode, err := f.Resolve(dst)
-	if err != nil {
-		return ErrNotExist
-	}
-	if !recursive && len(srcNode.Children) > 0 {
+	if !recursive && srcNode.IsDir && len(srcNode.Children) > 0 {
 		return ErrNotEmptyDir
 	}
+	parent, name, err := f.destination(src, dst)
+	if err != nil {
+		return err
+	}
 	newNode := srcNode.Clone()
-	dstNode.AddChild(newNode)
+	newNode.Name = name
+	parent.AddChild(newNode)
 	return nil
 }
 
@@ -242,14 +251,15 @@ func (f *VFS) Move(src, dst string) error {
 	if err != nil {
 		return ErrNotExist
 	}
-	dstNode, err := f.Resolve(dst)
-	if err != nil {
-		return ErrNotExist
-	}
 	if srcNode.Path() == "/" {
 		return ErrRootRemove
 	}
+	parent, name, err := f.destination(src, dst)
+	if err != nil {
+		return err
+	}
 	srcNode.Parent.removeChild(srcNode.Name)
-	dstNode.AddChild(srcNode)
+	srcNode.Name = name
+	parent.AddChild(srcNode)
 	return nil
 }
