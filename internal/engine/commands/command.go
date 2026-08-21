@@ -17,10 +17,11 @@ type Command interface {
 type Hidden interface{ Hidden() bool }
 
 type Context struct {
-	VFS    *vfs.VFS
-	Stdout io.Writer
-	Stderr io.Writer
-	Env    map[string]string
+	VFS     *vfs.VFS
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Env     map[string]string
+	History []string
 }
 
 var registry = map[string]Command{}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/vfs"
+	"slices"
 	"strings"
 )
 
@@ -13,8 +14,9 @@ const ShellName = "prt"
 const exitNotFound = 127
 
 type Session struct {
-	vfs *vfs.VFS
-	env map[string]string
+	vfs     *vfs.VFS
+	env     map[string]string
+	history []string
 }
 
 func NewSession() *Session {
@@ -76,6 +78,8 @@ func (s *Session) Execute(line string) Result {
 		break
 	}
 
+	s.history = append(s.history, line)
+
 	cmd, exist := commands.Lookup(name)
 	if !exist {
 		return Result{
@@ -87,10 +91,11 @@ func (s *Session) Execute(line string) Result {
 
 	var stdout, stderr bytes.Buffer
 	code := cmd.Run(&commands.Context{
-		VFS:    s.vfs,
-		Stdout: &stdout,
-		Stderr: &stderr,
-		Env:    s.env,
+		VFS:     s.vfs,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Env:     s.env,
+		History: slices.Clone(s.history),
 	}, args)
 
 	if redirect != nil {
