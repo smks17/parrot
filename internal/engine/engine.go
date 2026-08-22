@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/parser"
 	"parrot/internal/engine/vfs"
 	"slices"
-	"strings"
 )
 
 const ShellName = "prt"
@@ -39,57 +39,68 @@ type Redirect struct {
 
 func (s *Session) Execute(line string) Result {
 
-	fields := strings.Fields(line)
+	fields, err := parser.Parse(line)
+	if err != nil {
+		return Result{
+			Stderr:   fmt.Sprintf("%s: %v\n", ShellName, err),
+			ExitCode: 2,
+			Cwd:      s.vfs.Cwd(),
+		}
+	}
 	if len(fields) == 0 {
 		// A bare Enter is not an error, and it is not a command either.
 		return Result{Cwd: s.vfs.Cwd()}
 	}
 
-	name, args := fields[0], fields[1:]
+	name, fields := fields[0], fields[1:]
 
 	var redirect *Redirect
-	for i, arg := range args {
-		if arg != ">" {
+	for i, arg := range fields {
+		if arg.Kind != parser.TokenKind(parser.Redirect) {
 			continue
 		}
-		if i != len(args)-2 {
+		if i != len(fields)-2 {
 			return Result{
-				Stderr:   fmt.Sprintf("%s: %s: syntax error near unexpected token `>'\n", ShellName, name),
+				Stderr:   fmt.Sprintf("%s: %s: syntax error near unexpected token `>'\n", ShellName, name.Value),
 				ExitCode: 2,
 				Cwd:      s.vfs.Cwd(),
 			}
 		}
-		file := args[i+1]
-		node, err := s.vfs.Resolve(file)
+		file := fields[i+1]
+		node, err := s.vfs.Resolve(file.Value)
 		if err != nil {
-			if err = s.vfs.Create(file); err == nil {
-				node, err = s.vfs.Resolve(file)
+			if err = s.vfs.Create(file.Value); err == nil {
+				node, err = s.vfs.Resolve(file.Value)
 			}
 		}
 		if err != nil {
 			return Result{
-				Stderr:   fmt.Sprintf("%s: %s: %v\n", ShellName, file, err),
+				Stderr:   fmt.Sprintf("%s: %s: %v\n", ShellName, file.Value, err),
 				ExitCode: 1,
 				Cwd:      s.vfs.Cwd(),
 			}
 		}
 		redirect = &Redirect{node}
-		args = args[:i]
+		fields = fields[:i]
 		break
 	}
 
 	s.history = append(s.history, line)
 
-	cmd, exist := commands.Lookup(name)
+	cmd, exist := commands.Lookup(name.Value)
 	if !exist {
 		return Result{
-			Stderr:   fmt.Sprintf("%s: %s: command not found\n", ShellName, name),
+			Stderr:   fmt.Sprintf("%s: %s: command not found\n", ShellName, name.Value),
 			ExitCode: exitNotFound,
 			Cwd:      s.vfs.Cwd(),
 		}
 	}
 
 	var stdout, stderr bytes.Buffer
+	args := make([]string, len(fields))
+	for i, arg := range fields {
+		args[i] = arg.Value
+	}
 	code := cmd.Run(&commands.Context{
 		VFS:     s.vfs,
 		Stdout:  &stdout,
