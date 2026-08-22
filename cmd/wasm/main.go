@@ -1,0 +1,36 @@
+//go:build js && wasm
+
+package main
+
+import (
+	"fmt"
+	"parrot/internal/engine"
+	"syscall/js"
+)
+
+func main() {
+	js.Global().Set("__engineReady", js.ValueOf(true))
+	var session = engine.NewSession()
+	js.Global().Set("execute", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
+		if len(args) < 1 || args[0].Type() != js.TypeString {
+			return map[string]any{"stdout": "", "stderr": "execute: expected a string",
+				"exitCode": 2, "cwd": session.Cwd()}
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				result = map[string]any{
+					"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
+					"exitCode": 2, "cwd": session.Cwd(),
+				}
+			}
+		}()
+		r := session.Execute(args[0].String())
+		return map[string]any{
+			"stdout":   r.Stdout,
+			"stderr":   r.Stderr,
+			"exitCode": r.ExitCode,
+			"cwd":      r.Cwd,
+		}
+	}))
+	select {}
+}

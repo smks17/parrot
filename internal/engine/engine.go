@@ -232,3 +232,7 @@ func (s *Session) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *R
 	}
 	return parser.NewSimpleCommand(cmd, args, redirect), nil
 }
+
+func (s *Session) Cwd() string {
+	return s.vfs.Cwd()
+}
