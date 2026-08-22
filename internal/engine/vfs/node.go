@@ -79,3 +79,7 @@ func (n *Node) Clone() *Node {
 func (node *Node) Override(content []byte) {
 	node.Content = content
 }
+
+func (node *Node) Append(content []byte) {
+	node.Content = append(node.Content, content...)
+}

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -17,8 +18,15 @@ func (echo Echo) Usage() string { return "echo text...  — print text" }
 
 func (echo Echo) Run(ctx *Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintf(ctx.Stderr, "%s: missing operand\n", echo.Name())
-		return 1
+		if ctx.Stdin == nil {
+			fmt.Fprintf(ctx.Stderr, "%s: missing operand\n", echo.Name())
+			return 1
+		}
+		if _, err := io.Copy(ctx.Stdout, ctx.Stdin); err != nil {
+			fmt.Fprintf(ctx.Stderr, "%s: %v\n", echo.Name(), err)
+			return 1
+		}
+		return 0
 	}
 
 	content := strings.Join(args, " ") + "\n"

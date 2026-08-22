@@ -18,6 +18,7 @@ type Hidden interface{ Hidden() bool }
 
 type Context struct {
 	VFS     *vfs.VFS
+	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Env     map[string]string
