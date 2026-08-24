@@ -8,6 +8,7 @@ import (
 	"parrot/internal/engine/parser"
 	"parrot/internal/engine/vfs"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -235,4 +236,22 @@ func (s *Session) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *R
 
 func (s *Session) Cwd() string {
 	return s.vfs.Cwd()
+}
+
+func (s *Session) Complete(prefix string) []string {
+	nodes, err := s.vfs.List(s.vfs.Cwd())
+	if err != nil {
+		return nil
+	}
+	var matches []string
+	for _, node := range nodes {
+		if strings.HasPrefix(node.Name, ".") {
+			continue
+		}
+		if !strings.HasPrefix(node.Name, prefix) {
+			continue
+		}
+		matches = append(matches, node.Name)
+	}
+	return matches
 }

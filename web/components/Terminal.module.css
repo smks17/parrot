@@ -1,0 +1,106 @@
+.terminal {
+  height: 100vh;
+  width: 100%;
+  padding: 1.5rem;
+  cursor: text;
+  display: flex;
+  flex-direction: column;
+}
+
+.scrollback {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.entry {
+  margin-bottom: 0.25rem;
+}
+
+.promptLine {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5ch;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.stdout {
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.stderr {
+  color: var(--error);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+.input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  caret-color: transparent;
+}
+
+.input:focus {
+  outline: none;
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.6ch;
+  height: 1.1em;
+  background: var(--accent);
+  animation: blink 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  50.01%, 100% {
+    opacity: 0;
+  }
+}
+
+.error {
+  color: var(--error);
+  padding: 1.5rem;
+}
+
+.completions {
+  color: var(--dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: calc(1ch + 1em);
+}
+
+@media (max-width: 480px) {
+  .terminal {
+    padding: 0.75rem;
+  }
+
+  .scrollback {
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+}

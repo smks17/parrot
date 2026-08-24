@@ -30,3 +30,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# WASM build output
+*.wasm
+
+# Next.js build output and deps
+web/node_modules/
+web/.next/

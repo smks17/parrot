@@ -32,5 +32,23 @@ func main() {
 			"cwd":      r.Cwd,
 		}
 	}))
+
+	js.Global().Set("complete", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
+		if len(args) < 1 || args[0].Type() != js.TypeString {
+			return []any{}
+		}
+		defer func() {
+			if recover() != nil {
+				result = []any{}
+			}
+		}()
+		matches := session.Complete(args[0].String())
+		out := make([]any, len(matches))
+		for i, m := range matches {
+			out[i] = m
+		}
+		return out
+	}))
+
 	select {}
 }
