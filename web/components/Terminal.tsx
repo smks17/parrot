@@ -106,6 +106,9 @@ export default function Terminal() {
   }
 
   function focusInput() {
+    // A click that ends a text-drag-select still fires as a click; refocusing
+    // unconditionally would collapse the selection the user just made.
+    if (window.getSelection()?.toString()) return;
     inputRef.current?.focus();
   }
 
@@ -192,7 +195,6 @@ export default function Terminal() {
             autoCapitalize="off"
             aria-label="terminal input"
           />
-          <span className={styles.cursor} aria-hidden="true" />
         </div>
         {completions.length > 0 && (
           <div className={styles.completions}>{completions.join("  ")}</div>
