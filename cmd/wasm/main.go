@@ -50,5 +50,22 @@ func main() {
 		return out
 	}))
 
+	js.Global().Set("upload", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
+		if len(args) < 2 || args[0].Type() != js.TypeString {
+			return map[string]any{"stdout": "", "stderr": "upload: expected a path and bytes",
+				"exitCode": 2, "cwd": session.Cwd()}
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				result = map[string]any{"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
+					"exitCode": 2, "cwd": session.Cwd()}
+			}
+		}()
+		data := make([]byte, args[1].Get("length").Int())
+		js.CopyBytesToGo(data, args[1])
+		r := session.Upload(args[0].String(), data)
+		return map[string]any{"stdout": r.Stdout, "stderr": r.Stderr, "exitCode": r.ExitCode, "cwd": r.Cwd}
+	}))
+
 	select {}
 }

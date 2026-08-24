@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { complete, execute, loadEngine } from "@/lib/wasm-bridge";
+import { complete, execute, loadEngine, upload } from "@/lib/wasm-bridge";
 import styles from "./Terminal.module.css";
 
 interface Entry {
@@ -22,6 +22,8 @@ export default function Terminal() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
 
   const [completions, setCompletions] = useState<string[]>([]);
+
+  const [dragActive, setDragActive] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -107,12 +109,59 @@ export default function Terminal() {
     inputRef.current?.focus();
   }
 
+  function handleDragOver(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragActive(true);
+  }
+
+  function handleDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragActive(false);
+  }
+
+  async function handleDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragActive(false);
+
+    const files = Array.from(event.dataTransfer.files);
+    const results = await Promise.all(
+      files.map(async (file) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        return { file, res: upload("/downloads/" + file.name, bytes) };
+      })
+    );
+
+    setEntries((prev) => [
+      ...prev,
+      ...results.map(({ file, res }) => ({
+        cwd,
+        line: `upload ${file.name}`,
+        stdout: res.stdout,
+        stderr: res.stderr,
+      })),
+    ]);
+    if (results.length > 0) {
+      setCwd(results[results.length - 1].res.cwd);
+    }
+  }
+
   if (loadError) {
     return <p className={styles.error}>failed to load engine: {loadError}</p>;
   }
 
   return (
-    <div className={styles.terminal} onClick={focusInput}>
+    <div
+      className={styles.terminal}
+      onClick={focusInput}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragActive && (
+        <div className={styles.dropOverlay} aria-hidden="true">
+          drop to upload to /downloads
+        </div>
+      )}
       <div className={styles.scrollback} ref={scrollRef}>
         {entries.map((entry, i) => (
           <div key={i} className={styles.entry}>

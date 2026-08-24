@@ -9,6 +9,7 @@ declare global {
   interface Window {
     execute?: (input: string) => ExecResult;
     complete?: (prefix: string) => string[];
+    upload?: (path: string, data: Uint8Array) => ExecResult;
     __engineReady?: boolean;
   }
 }
@@ -66,4 +67,11 @@ export function complete(prefix: string): string[] {
     throw new Error("complete() called before the engine finished loading");
   }
   return window.complete(prefix);
+}
+
+export function upload(path: string, data: Uint8Array): ExecResult {
+  if (!window.upload) {
+    throw new Error("upload() called before the engine finished loading");
+  }
+  return window.upload(path, data);
 }

@@ -1,10 +1,25 @@
 .terminal {
+  position: relative;
   height: 100vh;
   width: 100%;
   padding: 1.5rem;
   cursor: text;
   display: flex;
   flex-direction: column;
+}
+
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-raised) 90%, transparent);
+  border: 2px dashed var(--accent);
+  color: var(--accent);
+  font-size: 1.1rem;
+  pointer-events: none;
 }
 
 .scrollback {

@@ -131,6 +131,16 @@ func (s *Session) Execute(line string) Result {
 	return Result{Stdout: stdout, Stderr: stderr, ExitCode: exitCode, Cwd: s.vfs.Cwd()}
 }
 
+func (s *Session) Upload(path string, data []byte) Result {
+	if err := s.vfs.Create(path); err != nil {
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: s.vfs.Cwd()}
+	}
+	if err := s.vfs.Write(path, data); err != nil {
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: s.vfs.Cwd()}
+	}
+	return Result{ExitCode: 0, Cwd: s.vfs.Cwd()}
+}
+
 func (s *Session) GetGoCommands(fields []*parser.Token) (*parser.AndList, *Result) {
 	goCommands := parser.NewAndList(make([]parser.Pipeline, 0))
 	begin := 0
