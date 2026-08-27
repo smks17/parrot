@@ -83,3 +83,29 @@ func (node *Node) Override(content []byte) {
 func (node *Node) Append(content []byte) {
 	node.Content = append(node.Content, content...)
 }
+
+type DumpNode struct {
+	Name     string      `json:"name"`
+	IsDir    bool        `json:"isDir"`
+	Content  []byte      `json:"content,omitempty"`
+	Children []*DumpNode `json:"children,omitempty"`
+}
+
+func (n *Node) Dump() *DumpNode {
+	d := &DumpNode{Name: n.Name, IsDir: n.IsDir, Content: n.Content}
+	for _, child := range n.Children {
+		d.Children = append(d.Children, child.Dump())
+	}
+	return d
+}
+
+func (d *DumpNode) ToNode() *Node {
+	if !d.IsDir {
+		return NewFile(d.Name, d.Content)
+	}
+	n := NewDir(d.Name)
+	for _, child := range d.Children {
+		n.AddChild(child.ToNode())
+	}
+	return n
+}

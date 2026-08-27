@@ -11,15 +11,8 @@ type VFS struct {
 	cwd  *Node
 }
 
-// New builds the seed filesystem described in Project.md and starts the
-// session in the user's home directory.
-//
-// Construction is deterministic: no clock, no randomness, nothing read from
-// the environment. Two calls produce identical trees, which is what makes the
-// tests and the terminal itself reproducible.
-//
-// Content here is structural placeholder only. The book-club material and the
-// jokes arrive in Milestone 8 as embedded data files, never hardcoded.
+const HomeUser = "mahdi"
+
 func New() *VFS {
 	root := NewDir("")
 
@@ -30,7 +23,7 @@ func New() *VFS {
 	}
 
 	home := root.Children["home"]
-	home.AddChild(NewDir("friend"))
+	home.AddChild(NewDir(HomeUser))
 
 	root.AddChild(NewFile("README.md", []byte(
 		"Welcome.\n\nYou are in a terminal that isn't quite real.\nTry: ls, cd, cat\n",
@@ -38,23 +31,26 @@ func New() *VFS {
 
 	return &VFS{
 		root: root,
-		cwd:  home.Children["friend"],
+		cwd:  home.Children[HomeUser],
 	}
+}
+
+func FromRoot(root *Node, cwd string) *VFS {
+	f := &VFS{root: root, cwd: root}
+	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir {
+		f.cwd = dir
+	}
+	return f
 }
 
 func (f *VFS) Cwd() string {
 	return f.cwd.Path()
 }
 
-// Resolve turns a path string into a node.
-//
-// An empty path means the current directory. A path starting with "/" walks
-// from the root, anything else from the cwd. "." is a no-op and ".." moves to
-// the parent, staying at the root when already there — as real Unix does.
-//
-// The walk is deliberate rather than lexical: path.Clean would rewrite
-// "/a/../b" to "/b" without ever checking that "a" exists, which is not what
-// a filesystem does.
+func (f *VFS) RootNode() *Node {
+	return f.root
+}
+
 func (f *VFS) Resolve(path string) (*Node, error) {
 	curr := f.cwd
 	if strings.HasPrefix(path, "/") {
@@ -62,8 +58,6 @@ func (f *VFS) Resolve(path string) (*Node, error) {
 	}
 
 	for _, seg := range strings.Split(path, "/") {
-		// Split yields empty segments for a leading "/", a trailing "/",
-		// and any "//" run. All of them mean "stay here".
 		if seg == "" || seg == "." {
 			continue
 		}
@@ -75,9 +69,6 @@ func (f *VFS) Resolve(path string) (*Node, error) {
 			continue
 		}
 
-		// Only a directory can have anything below it. Checking here rather
-		// than after the lookup is what distinguishes "/README.md/x"
-		// (not a directory) from "/nope/x" (no such file).
 		if !curr.IsDir {
 			return nil, ErrNotDir
 		}
@@ -100,28 +91,15 @@ func (f *VFS) Chdir(path string) error {
 	if !dir.IsDir {
 		return ErrNotDir
 	}
-	// Assigned only after both checks pass, so a failed Chdir leaves the
-	// cwd untouched rather than half-moved.
 	f.cwd = dir
 	return nil
 }
 
-// splitParent resolves the parent directory of path and returns it alongside
-// the final segment, ready to be linked in.
-//
-// Taking the node to create as an argument — rather than a string naming its
-// kind — means there is no invalid input to handle, and so no error path that
-// only a bug could reach.
 func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
-	// Trailing slashes name the same directory; "/books/" has no final
-	// segment of its own.
 	trimmed := strings.TrimRight(path, "/")
 	if trimmed == "" {
 		return nil, "", ErrExists // the root always exists
 	}
-
-	// A bare name like "notes.txt" has no parent segment, so its parent is
-	// wherever we are standing — "." — not the root.
 	parentPath, name := ".", trimmed
 	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
 		parentPath, name = trimmed[:i], trimmed[i+1:]

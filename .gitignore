@@ -26,10 +26,18 @@ go.work.sum
 
 # env file
 .env
+.env.local
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+.gitignore
+docs/
+.claude/
+CLAUDE.md
+Project.md
+*/**/*_test.go
 
 # WASM build output
 *.wasm

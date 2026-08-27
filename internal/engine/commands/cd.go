@@ -1,9 +1,12 @@
 package commands
 
-import "fmt"
+import (
+	"fmt"
+	"parrot/internal/engine/vfs"
+)
 
 // homeDir is where a bare "cd" lands, matching the seed tree in vfs.New.
-const homeDir = "/home/friend"
+var homeDir = "/home/" + vfs.HomeUser
 
 type Cd struct{}
 

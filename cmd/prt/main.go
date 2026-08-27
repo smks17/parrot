@@ -11,7 +11,7 @@ import (
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	var session = engine.NewSession()
+	var app = engine.NewApp()
 
 	for {
 		fmt.Print("$ ")
@@ -29,7 +29,7 @@ func main() {
 			break
 		}
 
-		res := session.Execute(line)
+		res := app.Execute(line)
 
 		// Stdout and Stderr go to the real streams so redirection
 		if res.Stdout != "" {

@@ -16,6 +16,27 @@ const ShellName = "prt"
 
 const exitNotFound = 127
 
+type App struct {
+	session *Session
+}
+
+func NewApp() *App {
+	return &App{NewSession()}
+}
+
+func (app *App) Snapshot() ([]byte, error) {
+	return app.session.Snapshot()
+}
+
+func (app *App) Restore(data []byte) error {
+	session, err := LoadSession(data)
+	if err != nil {
+		return err
+	}
+	app.session = session
+	return nil
+}
+
 type Session struct {
 	vfs     *vfs.VFS
 	env     map[string]string
@@ -38,7 +59,7 @@ type Result struct {
 
 // runPipeline wires a Pipeline's commands together with io.Pipe and a
 // goroutine per stage
-func (s *Session) runPipeline(pipeline *parser.Pipeline) (stdout, stderr string, exitCode int) {
+func (app *App) runPipeline(pipeline *parser.Pipeline) (stdout, stderr string, exitCode int) {
 	var finalOut, finalErr bytes.Buffer
 	var wg sync.WaitGroup
 	exitCodes := make([]int, len(pipeline.Commands))
@@ -66,12 +87,12 @@ func (s *Session) runPipeline(pipeline *parser.Pipeline) (stdout, stderr string,
 				defer pw.Close()
 			}
 			ctx := &commands.Context{
-				VFS:     s.vfs,
+				VFS:     app.session.vfs,
 				Stdin:   in,
 				Stdout:  out,
 				Stderr:  &finalErr,
-				Env:     s.env,
-				History: slices.Clone(s.history),
+				Env:     app.session.env,
+				History: slices.Clone(app.session.history),
 			}
 			exitCodes[i] = command.Cmd.Run(ctx, command.Args)
 			if in != nil {
@@ -99,23 +120,23 @@ func (s *Session) runPipeline(pipeline *parser.Pipeline) (stdout, stderr string,
 	return finalOut.String(), finalErr.String(), exitCodes[len(exitCodes)-1]
 }
 
-func (s *Session) Execute(line string) Result {
+func (app *App) Execute(line string) Result {
 
 	fields, err := parser.Parse(line)
 	if err != nil {
 		return Result{
 			Stderr:   fmt.Sprintf("%s: %v\n", ShellName, err),
 			ExitCode: 2,
-			Cwd:      s.vfs.Cwd(),
+			Cwd:      app.session.vfs.Cwd(),
 		}
 	}
 	if len(fields) == 0 {
-		return Result{Cwd: s.vfs.Cwd()}
+		return Result{Cwd: app.session.vfs.Cwd()}
 	}
 
-	s.history = append(s.history, line)
+	app.session.history = append(app.session.history, line)
 
-	goCommands, result := s.GetGoCommands(fields)
+	goCommands, result := app.GetGoCommands(fields)
 	if result != nil {
 		return *result
 	}
@@ -123,30 +144,30 @@ func (s *Session) Execute(line string) Result {
 	var stdout, stderr string
 	exitCode := 0
 	for _, pipeline := range goCommands.Pipelines {
-		stdout, stderr, exitCode = s.runPipeline(&pipeline)
+		stdout, stderr, exitCode = app.runPipeline(&pipeline)
 		if exitCode != 0 {
 			break
 		}
 	}
-	return Result{Stdout: stdout, Stderr: stderr, ExitCode: exitCode, Cwd: s.vfs.Cwd()}
+	return Result{Stdout: stdout, Stderr: stderr, ExitCode: exitCode, Cwd: app.session.vfs.Cwd()}
 }
 
-func (s *Session) Upload(path string, data []byte) Result {
-	if err := s.vfs.Create(path); err != nil {
-		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: s.vfs.Cwd()}
+func (app *App) Upload(path string, data []byte) Result {
+	if err := app.session.vfs.Create(path); err != nil {
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.vfs.Cwd()}
 	}
-	if err := s.vfs.Write(path, data); err != nil {
-		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: s.vfs.Cwd()}
+	if err := app.session.vfs.Write(path, data); err != nil {
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.vfs.Cwd()}
 	}
-	return Result{ExitCode: 0, Cwd: s.vfs.Cwd()}
+	return Result{ExitCode: 0, Cwd: app.session.vfs.Cwd()}
 }
 
-func (s *Session) GetGoCommands(fields []*parser.Token) (*parser.AndList, *Result) {
+func (app *App) GetGoCommands(fields []*parser.Token) (*parser.AndList, *Result) {
 	goCommands := parser.NewAndList(make([]parser.Pipeline, 0))
 	begin := 0
 	for i, arg := range fields {
 		if arg.Kind == parser.And {
-			pipeline, res := s.GetPipeline(fields[begin:i])
+			pipeline, res := app.GetPipeline(fields[begin:i])
 			if res != nil {
 				return nil, res
 			}
@@ -154,7 +175,7 @@ func (s *Session) GetGoCommands(fields []*parser.Token) (*parser.AndList, *Resul
 			begin = i + 1
 		}
 	}
-	pipeline, res := s.GetPipeline(fields[begin:])
+	pipeline, res := app.GetPipeline(fields[begin:])
 	if res != nil {
 		return nil, res
 	}
@@ -162,12 +183,12 @@ func (s *Session) GetGoCommands(fields []*parser.Token) (*parser.AndList, *Resul
 	return goCommands, nil
 }
 
-func (s *Session) GetPipeline(fields []*parser.Token) (*parser.Pipeline, *Result) {
+func (app *App) GetPipeline(fields []*parser.Token) (*parser.Pipeline, *Result) {
 	pipeline := parser.NewPipeline(make([]parser.SimpleCommand, 0))
 	begin := 0
 	for i, arg := range fields {
 		if arg.Kind == parser.Pipe {
-			command, res := s.GetCommands(fields[begin:i])
+			command, res := app.GetCommands(fields[begin:i])
 			if res != nil {
 				return nil, res
 			}
@@ -175,7 +196,7 @@ func (s *Session) GetPipeline(fields []*parser.Token) (*parser.Pipeline, *Result
 			begin = i + 1
 		}
 	}
-	command, res := s.GetCommands(fields[begin:])
+	command, res := app.GetCommands(fields[begin:])
 	if res != nil {
 		return nil, res
 	}
@@ -183,12 +204,12 @@ func (s *Session) GetPipeline(fields []*parser.Token) (*parser.Pipeline, *Result
 	return pipeline, nil
 }
 
-func (s *Session) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *Result) {
+func (app *App) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *Result) {
 	if len(fields) == 0 {
 		return nil, &Result{
 			Stderr:   fmt.Sprintf("%s: syntax error near unexpected token\n", ShellName),
 			ExitCode: 2,
-			Cwd:      s.vfs.Cwd(),
+			Cwd:      app.session.vfs.Cwd(),
 		}
 	}
 	name, fields := fields[0], fields[1:]
@@ -207,21 +228,21 @@ func (s *Session) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *R
 			return nil, &Result{
 				Stderr:   fmt.Sprintf("%s: %s: syntax error near unexpected token `%s'\n", ShellName, name.Value, redirectToken),
 				ExitCode: 2,
-				Cwd:      s.vfs.Cwd(),
+				Cwd:      app.session.vfs.Cwd(),
 			}
 		}
 		file := fields[i+1]
-		node, err := s.vfs.Resolve(file.Value)
+		node, err := app.session.vfs.Resolve(file.Value)
 		if err != nil {
-			if err = s.vfs.Create(file.Value); err == nil {
-				node, err = s.vfs.Resolve(file.Value)
+			if err = app.session.vfs.Create(file.Value); err == nil {
+				node, err = app.session.vfs.Resolve(file.Value)
 			}
 		}
 		if err != nil {
 			return nil, &Result{
 				Stderr:   fmt.Sprintf("%s: %s: %v\n", ShellName, file.Value, err),
 				ExitCode: 1,
-				Cwd:      s.vfs.Cwd(),
+				Cwd:      app.session.vfs.Cwd(),
 			}
 		}
 		redirect.File = node
@@ -238,14 +259,22 @@ func (s *Session) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *R
 		return nil, &Result{
 			Stderr:   fmt.Sprintf("%s: %s: command not found\n", ShellName, name.Value),
 			ExitCode: exitNotFound,
-			Cwd:      s.vfs.Cwd(),
+			Cwd:      app.session.vfs.Cwd(),
 		}
 	}
 	return parser.NewSimpleCommand(cmd, args, redirect), nil
 }
 
+func (app *App) Cwd() string {
+	return app.session.Cwd()
+}
+
 func (s *Session) Cwd() string {
 	return s.vfs.Cwd()
+}
+
+func (app *App) Complete(prefix string) []string {
+	return app.session.Complete(prefix)
 }
 
 func (s *Session) Complete(prefix string) []string {
