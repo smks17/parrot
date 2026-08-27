@@ -58,6 +58,15 @@ export default function Terminal() {
     }
   }, [entries])
 
+  // autoFocus on the <input> only fires once, at mount — and the input is
+  // still `disabled` at that point (the engine hasn't loaded yet), so
+  // browsers skip it. Focus explicitly the moment it becomes usable instead.
+  useEffect(() => {
+    if (ready) {
+      inputRef.current?.focus();
+    }
+  }, [ready])
+
   function runLine(line: string) {
     const res = execute(line);
     setEntries((prev) => [...prev, { cwd, line, stdout: res.stdout, stderr: res.stderr }]);
@@ -207,7 +216,7 @@ export default function Terminal() {
             }}
             onKeyDown={handleKeyDown}
             disabled={!ready}
-            autoFocus
+            placeholder={ready ? "" : "loading engine..."}
             spellCheck={false}
             autoComplete="off"
             autoCapitalize="off"

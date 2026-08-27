@@ -74,6 +74,10 @@
   outline: none;
 }
 
+.input::placeholder {
+  color: var(--dim);
+}
+
 .error {
   color: var(--error);
   padding: 1.5rem;
