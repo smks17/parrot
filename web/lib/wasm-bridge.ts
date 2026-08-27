@@ -10,6 +10,8 @@ declare global {
     execute?: (input: string) => ExecResult;
     complete?: (prefix: string) => string[];
     upload?: (path: string, data: Uint8Array) => ExecResult;
+    snapshot?: () => Uint8Array | null;
+    loadSession?: (data: Uint8Array) => boolean;
     __engineReady?: boolean;
   }
 }
@@ -74,4 +76,18 @@ export function upload(path: string, data: Uint8Array): ExecResult {
     throw new Error("upload() called before the engine finished loading");
   }
   return window.upload(path, data);
+}
+
+export function snapshot(): Uint8Array | null {
+  if (!window.snapshot) {
+    throw new Error("snapshot() called before the engine finished loading");
+  }
+  return window.snapshot();
+}
+
+export function loadSession(data: Uint8Array): boolean {
+  if (!window.loadSession) {
+    throw new Error("loadSession() called before the engine finished loading");
+  }
+  return window.loadSession(data);
 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import BootSequence from "@/components/BootSequence";
 import Terminal from "@/components/Terminal";
+import SessionControls from "@/components/SessionControls";
 
 export default function Home() {
   const [booted, setBooted] = useState(false);
@@ -10,5 +11,10 @@ export default function Home() {
   if (!booted) {
     return <BootSequence onDone={() => setBooted(true)} />;
   }
-  return <Terminal />;
+  return (
+    <>
+      <SessionControls />
+      <Terminal />
+    </>
+  );
 }

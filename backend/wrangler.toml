@@ -1,0 +1,8 @@
+name = "parrot-backend"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "parrot"
+database_id = "e6c00f60-3423-4fd9-85d3-8a165fa3bc55"

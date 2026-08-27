@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { complete, execute, loadEngine, upload } from "@/lib/wasm-bridge";
+import { complete, execute, loadEngine, loadSession, upload } from "@/lib/wasm-bridge";
+import { fetchSession } from "@/lib/backend";
 import styles from "./Terminal.module.css";
 
 interface Entry {
@@ -16,7 +17,11 @@ export default function Terminal() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
   const [input, setInput] = useState("")
-  const [cwd, setCwd] = useState("/home/friend")
+  // Matches vfs.HomeUser in internal/engine/vfs/vfs.go — only the initial
+  // render before the engine reports the real cwd, so this can drift out of
+  // sync with a Go-side rename without breaking anything, just looking wrong
+  // for one frame.
+  const [cwd, setCwd] = useState("/home/mahdi")
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
@@ -30,7 +35,20 @@ export default function Terminal() {
 
   useEffect(() => {
     loadEngine()
-      .then(() => setReady(true))
+      .then(async () => {
+        const sessionId = new URLSearchParams(window.location.search).get("session");
+        if (sessionId) {
+          try {
+            const bytes = await fetchSession(sessionId);
+            loadSession(bytes);
+            setCwd(execute("pwd").stdout.trim());
+          } catch {
+            // Bad or missing link: fall back to the fresh session already
+            // running rather than blocking the terminal from loading.
+          }
+        }
+        setReady(true);
+      })
       .catch((err: Error) => setLoadError(err.message))
   }, [])
 

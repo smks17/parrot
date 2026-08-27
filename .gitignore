@@ -45,3 +45,8 @@ Project.md
 # Next.js build output and deps
 web/node_modules/
 web/.next/
+web/out/
+
+# Cloudflare Worker local cache/build output
+backend/.wrangler/
+backend/node_modules/
