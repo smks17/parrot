@@ -9,4 +9,6 @@ var (
 	ErrExists      = errors.New("file exists")
 	ErrNotEmptyDir = errors.New("directory not empty")
 	ErrRootRemove  = errors.New("cannot remove root directory")
+	ErrPermission  = errors.New("permission denied")
+	ErrNotOwner    = errors.New("operation not permitted")
 )

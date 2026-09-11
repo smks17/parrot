@@ -1,32 +1,48 @@
 package vfs
 
-import "strings"
+import (
+	"strings"
+)
 
 type Node struct {
 	Name     string
-	IsDir    bool
 	Content  []byte           // nil for directories
 	Children map[string]*Node // nil for files
 	Parent   *Node            // nil at root; makes ".." a pointer hop
+
+	Mode  FileMode // rwx bits for owner/group/other
+	Owner string   // username, e.g. "mahdi"
+	Group string   // group name, e.g. "users"
 }
 
 func NewFile(name string, content []byte) *Node {
 	return &Node{
 		Name:     name,
-		IsDir:    false,
 		Content:  content,
 		Children: nil,
 		Parent:   nil,
+
+		Mode:  DefaultFileMode,
+		Owner: HomeUser,
+		Group: HomeGroup,
 	}
 }
 
 func NewDir(name string) *Node {
 	return &Node{
 		Name:     name,
-		IsDir:    true,
+		Content:  nil,
 		Children: map[string]*Node{},
 		Parent:   nil,
+
+		Mode:  DefaultDirMode,
+		Owner: HomeUser,
+		Group: HomeGroup,
 	}
+}
+
+func (node *Node) IsDir() bool {
+	return node.Mode.IsDirectory()
 }
 
 // Path walks up through Parent to build the absolute path. The root reports "/".
@@ -65,34 +81,45 @@ func (n *Node) Clone() *Node {
 	}
 	newNode := &Node{
 		Name:     n.Name,
-		IsDir:    n.IsDir,
 		Content:  n.Content,
 		Children: newListChildren,
 		Parent:   nil,
+
+		Mode:  n.Mode,
+		Owner: n.Owner,
+		Group: n.Group,
 	}
-	for _, child := range n.Children {
+	// Reparent the CLONED children — reparenting the original tree's
+	// children here would silently steal their ".." hops.
+	for _, child := range newListChildren {
 		child.Parent = newNode
 	}
 	return newNode
 }
 
-func (node *Node) Override(content []byte) {
+func (node *Node) override(content []byte) {
 	node.Content = content
 }
 
-func (node *Node) Append(content []byte) {
+func (node *Node) append(content []byte) {
 	node.Content = append(node.Content, content...)
 }
 
 type DumpNode struct {
 	Name     string      `json:"name"`
-	IsDir    bool        `json:"isDir"`
 	Content  []byte      `json:"content,omitempty"`
 	Children []*DumpNode `json:"children,omitempty"`
+
+	// Mode is a pointer so a fully-chmod'ed-away 000 survives the round
+	// trip, while snapshots saved before permissions existed (no "mode"
+	// key) restore to the constructor defaults instead of losing theirs.
+	Mode  *FileMode `json:"mode,omitempty"`
+	Owner string    `json:"owner,omitempty"`
+	Group string    `json:"group,omitempty"`
 }
 
 func (n *Node) Dump() *DumpNode {
-	d := &DumpNode{Name: n.Name, IsDir: n.IsDir, Content: n.Content}
+	d := &DumpNode{Name: n.Name, Content: n.Content, Mode: &n.Mode, Owner: n.Owner, Group: n.Group}
 	for _, child := range n.Children {
 		d.Children = append(d.Children, child.Dump())
 	}
@@ -100,10 +127,15 @@ func (n *Node) Dump() *DumpNode {
 }
 
 func (d *DumpNode) ToNode() *Node {
-	if !d.IsDir {
-		return NewFile(d.Name, d.Content)
+	var n *Node
+	if d.Mode.IsDirectory() {
+		n = NewDir(d.Name)
+	} else {
+		n = NewFile(d.Name, d.Content)
 	}
-	n := NewDir(d.Name)
+	n.Mode = *d.Mode
+	n.Owner = d.Owner
+	n.Group = d.Group
 	for _, child := range d.Children {
 		n.AddChild(child.ToNode())
 	}

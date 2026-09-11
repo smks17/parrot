@@ -7,11 +7,16 @@ import (
 )
 
 type VFS struct {
-	root *Node
-	cwd  *Node
+	root  *Node
+	cwd   *Node
+	user  string
+	group string
 }
 
-const HomeUser = "mahdi"
+const (
+	HomeUser  = "mahdi"
+	HomeGroup = "users"
+)
 
 func New() *VFS {
 	root := NewDir("")
@@ -30,17 +35,25 @@ func New() *VFS {
 	)))
 
 	return &VFS{
-		root: root,
-		cwd:  home.Children[HomeUser],
+		root:  root,
+		cwd:   home.Children[HomeUser],
+		user:  HomeUser,
+		group: HomeGroup,
 	}
 }
 
 func FromRoot(root *Node, cwd string) *VFS {
-	f := &VFS{root: root, cwd: root}
-	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir {
+	f := &VFS{root: root, cwd: root, user: HomeUser, group: HomeGroup}
+	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
 		f.cwd = dir
 	}
 	return f
+}
+
+func (f *VFS) SetUser(user, group string) {
+	// TODO: check existing user, group
+	f.user = user
+	f.group = group
 }
 
 func (f *VFS) Cwd() string {
@@ -69,8 +82,13 @@ func (f *VFS) Resolve(path string) (*Node, error) {
 			continue
 		}
 
-		if !curr.IsDir {
+		if !curr.IsDir() {
 			return nil, ErrNotDir
+		}
+
+		// Looking up a name inside a directory needs execute on it
+		if err := f.checkPerm(curr, permExec); err != nil {
+			return nil, err
 		}
 
 		next, ok := curr.Children[seg]
@@ -88,8 +106,12 @@ func (f *VFS) Chdir(path string) error {
 	if err != nil {
 		return err
 	}
-	if !dir.IsDir {
+	if !dir.IsDir() {
 		return ErrNotDir
+	}
+	// Entering a directory needs execute on the directory itself
+	if err := f.checkPerm(dir, permExec); err != nil {
+		return err
 	}
 	f.cwd = dir
 	return nil
@@ -112,7 +134,7 @@ func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if !parent.IsDir {
+	if !parent.IsDir() {
 		return nil, "", ErrNotDir
 	}
 	if _, exists := parent.Children[name]; exists {
@@ -126,6 +148,10 @@ func (f *VFS) Mkdir(path string) error {
 	if err != nil {
 		return err
 	}
+	// Creating an entry is a write on the parent directory + the search to reach into it
+	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+		return err
+	}
 	parent.AddChild(NewDir(name))
 	return nil
 }
@@ -135,19 +161,30 @@ func (f *VFS) Create(path string) error {
 	if err != nil {
 		return err
 	}
+	// Creating an entry is a write on the parent directory + the search to reach into it
+	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+		return err
+	}
 	parent.AddChild(NewFile(name, nil))
 	return nil
 }
 
-func (f *VFS) Write(path string, b []byte) error {
+func (f *VFS) Write(path string, b []byte, writeAppend bool) error {
 	nodeFile, err := f.Resolve(path)
 	if err != nil {
 		return err
 	}
-	if nodeFile.IsDir {
+	if err := f.checkPerm(nodeFile, permWrite); err != nil {
+		return err
+	}
+	if nodeFile.IsDir() {
 		return ErrIsDir
 	}
-	nodeFile.Content = b
+	if writeAppend {
+		nodeFile.append(b)
+	} else {
+		nodeFile.override(b)
+	}
 	return nil
 
 }
@@ -157,7 +194,10 @@ func (f *VFS) Read(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if nodeFile.IsDir {
+	if err := f.checkPerm(nodeFile, permRead); err != nil {
+		return nil, err
+	}
+	if nodeFile.IsDir() {
 		return nil, ErrIsDir
 	}
 	return nodeFile.Content, nil
@@ -168,8 +208,12 @@ func (f *VFS) List(path string) ([]*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !nodeFile.IsDir {
+	if !nodeFile.IsDir() {
 		return []*Node{nodeFile}, nil
+	}
+	// Reading the names inside a directory is the directory's read bit.
+	if err := f.checkPerm(nodeFile, permRead); err != nil {
+		return nil, err
 	}
 	var sortedNode []*Node
 	for _, node := range nodeFile.Children {
@@ -192,7 +236,11 @@ func (f *VFS) Remove(path string, recursive bool) error {
 	if node.Parent == nil {
 		return ErrRootRemove
 	}
-	if node.IsDir && len(node.Children) > 0 && !recursive {
+	// Unlinking is a write on the directory the entry lives in
+	if err := f.checkPerm(node.Parent, permWrite|permExec); err != nil {
+		return err
+	}
+	if node.IsDir() && len(node.Children) > 0 && !recursive {
 		return ErrNotEmptyDir
 	}
 	node.Parent.removeChild(node.Name)
@@ -200,7 +248,7 @@ func (f *VFS) Remove(path string, recursive bool) error {
 }
 
 func (f *VFS) destination(src, dst string) (parent *Node, name string, err error) {
-	if dstNode, err := f.Resolve(dst); err == nil && dstNode.IsDir {
+	if dstNode, err := f.Resolve(dst); err == nil && dstNode.IsDir() {
 		return dstNode, path.Base(strings.TrimRight(src, "/")), nil
 	}
 	return f.splitParent(dst)
@@ -209,13 +257,21 @@ func (f *VFS) destination(src, dst string) (parent *Node, name string, err error
 func (f *VFS) Copy(src, dst string, recursive bool) error {
 	srcNode, err := f.Resolve(src)
 	if err != nil {
-		return ErrNotExist
+		return err
 	}
-	if !recursive && srcNode.IsDir && len(srcNode.Children) > 0 {
+	if !recursive && srcNode.IsDir() && len(srcNode.Children) > 0 {
 		return ErrNotEmptyDir
+	}
+	// Copying reads the source's content.
+	if err := f.checkPerm(srcNode, permRead); err != nil {
+		return err
 	}
 	parent, name, err := f.destination(src, dst)
 	if err != nil {
+		return err
+	}
+	// ...and creating the copy is a write on the destination directory.
+	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
 	newNode := srcNode.Clone()
@@ -227,13 +283,20 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 func (f *VFS) Move(src, dst string) error {
 	srcNode, err := f.Resolve(src)
 	if err != nil {
-		return ErrNotExist
+		return err
 	}
 	if srcNode.Path() == "/" {
 		return ErrRootRemove
 	}
+	// A rename is a write on the directory the entry leaves + one on the directory it lands in
+	if err := f.checkPerm(srcNode.Parent, permWrite|permExec); err != nil {
+		return err
+	}
 	parent, name, err := f.destination(src, dst)
 	if err != nil {
+		return err
+	}
+	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
 	srcNode.Parent.removeChild(srcNode.Name)
