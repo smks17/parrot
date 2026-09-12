@@ -10,6 +10,8 @@ type snapshot struct {
 	Cwd     string            `json:"cwd"`
 	Env     map[string]string `json:"env"`
 	History []string          `json:"history"`
+	User    string            `json:"user,omitempty"`
+	Group   string            `json:"group,omitempty"`
 }
 
 func (s *Session) Snapshot() ([]byte, error) {
@@ -18,6 +20,8 @@ func (s *Session) Snapshot() ([]byte, error) {
 		Cwd:     s.vfs.Cwd(),
 		Env:     s.env,
 		History: s.history,
+		User:    s.user,
+		Group:   s.group,
 	}
 	return json.Marshal(snap)
 }
@@ -33,9 +37,22 @@ func LoadSession(data []byte) (*Session, error) {
 		env[k] = v
 	}
 
+	user, group := snap.User, snap.Group
+	if user == "" {
+		user = vfs.HomeUser
+	}
+	if group == "" {
+		group = vfs.HomeGroup
+	}
+
+	v := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd)
+	v.SetUser(user, group)
+
 	return &Session{
-		vfs:     vfs.FromRoot(snap.Root.ToNode(), snap.Cwd),
+		vfs:     v,
 		env:     env,
 		history: append([]string(nil), snap.History...),
+		user:    user,
+		group:   group,
 	}, nil
 }
