@@ -304,3 +304,43 @@ func (f *VFS) Move(src, dst string) error {
 	parent.AddChild(srcNode)
 	return nil
 }
+
+func (f *VFS) Chmod(path string, mode FileMode) error {
+	node, err := f.Resolve(path)
+	if err != nil {
+		return err
+	}
+	return f.ChmodNode(node, mode)
+}
+
+func (f *VFS) ChmodNode(n *Node, mode FileMode) error {
+	if err := f.checkOwnership(n); err != nil {
+		return err
+	}
+	// Clear existing permission bits
+	n.Mode &= ^FileMode(0777)
+	// Set new permission bits
+	n.Mode |= mode & 0777
+	return nil
+}
+
+func (f *VFS) Chown(path, owner, group string) error {
+	node, err := f.Resolve(path)
+	if err != nil {
+		return err
+	}
+	return f.ChownNode(node, owner, group)
+}
+
+func (f *VFS) ChownNode(n *Node, owner, group string) error {
+	if err := f.checkOwnership(n); err != nil {
+		return err
+	}
+	if owner != "" {
+		n.Owner = owner
+	}
+	if group != "" {
+		n.Group = group
+	}
+	return nil
+}

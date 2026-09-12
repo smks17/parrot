@@ -141,3 +141,16 @@ func (d *DumpNode) ToNode() *Node {
 	}
 	return n
 }
+
+func (n *Node) Walk(do func(node *Node) error) error {
+	err := do(n)
+	if err != nil {
+		return err
+	}
+	for _, child := range n.Children {
+		err = child.Walk(do)
+		if err != nil {
+			return err
+		}
+	}
+}
