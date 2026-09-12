@@ -2,12 +2,11 @@ package parser
 
 import (
 	"parrot/internal/engine/commands"
-	"parrot/internal/engine/vfs"
 )
 
 type RedirectFile struct {
-	File   *vfs.Node
-	Append bool // true for >>, false for >
+	FilePath string
+	Append   bool // true for >>, false for >
 }
 
 type SimpleCommand struct {

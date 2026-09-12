@@ -41,14 +41,23 @@ type Session struct {
 	vfs     *vfs.VFS
 	env     map[string]string
 	history []string
+
+	user  string
+	group string
 }
 
 func NewSession() *Session {
 	return &Session{
-		vfs: vfs.New(),
-		env: map[string]string{},
+		vfs:   vfs.New(),
+		env:   map[string]string{},
+		user:  vfs.HomeUser,
+		group: vfs.HomeGroup,
 	}
 }
+
+func (s *Session) User() string { return s.user }
+
+func (s *Session) Group() string { return s.group }
 
 type Result struct {
 	Stdout   string
@@ -107,14 +116,23 @@ func (app *App) runPipeline(pipeline *parser.Pipeline) (stdout, stderr string, e
 	wg.Wait()
 
 	if last := pipeline.Commands[len(pipeline.Commands)-1]; last.Redirect != nil {
+		filePath := last.Redirect.FilePath
+		app.session.vfs.Create(filePath) // create if not exist
 		written := append(finalOut.Bytes(), finalErr.Bytes()...)
-		if last.Redirect.Append {
-			last.Redirect.File.Append(written)
-		} else {
-			last.Redirect.File.Override(written)
-		}
 		finalOut.Reset()
-		finalErr.Reset()
+		var err error
+		if last.Redirect.Append {
+			err = app.session.vfs.Write(filePath, written, true)
+		} else {
+			err = app.session.vfs.Write(filePath, written, false)
+		}
+		if err != nil {
+			finalErr.WriteString(err.Error())
+			finalErr.WriteRune('\n')
+			exitCodes = append(exitCodes, 1)
+		} else {
+			finalErr.Reset()
+		}
 	}
 
 	return finalOut.String(), finalErr.String(), exitCodes[len(exitCodes)-1]
@@ -156,7 +174,7 @@ func (app *App) Upload(path string, data []byte) Result {
 	if err := app.session.vfs.Create(path); err != nil {
 		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.vfs.Cwd()}
 	}
-	if err := app.session.vfs.Write(path, data); err != nil {
+	if err := app.session.vfs.Write(path, data, false); err != nil {
 		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.vfs.Cwd()}
 	}
 	return Result{ExitCode: 0, Cwd: app.session.vfs.Cwd()}
@@ -232,20 +250,7 @@ func (app *App) GetCommands(fields []*parser.Token) (*parser.SimpleCommand, *Res
 			}
 		}
 		file := fields[i+1]
-		node, err := app.session.vfs.Resolve(file.Value)
-		if err != nil {
-			if err = app.session.vfs.Create(file.Value); err == nil {
-				node, err = app.session.vfs.Resolve(file.Value)
-			}
-		}
-		if err != nil {
-			return nil, &Result{
-				Stderr:   fmt.Sprintf("%s: %s: %v\n", ShellName, file.Value, err),
-				ExitCode: 1,
-				Cwd:      app.session.vfs.Cwd(),
-			}
-		}
-		redirect.File = node
+		redirect.FilePath = file.Value
 		fields = fields[:i]
 		break
 	}
