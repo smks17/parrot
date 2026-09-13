@@ -153,4 +153,5 @@ func (n *Node) Walk(do func(node *Node) error) error {
 			return err
 		}
 	}
+	return nil
 }
