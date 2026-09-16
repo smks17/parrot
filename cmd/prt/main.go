@@ -8,10 +8,25 @@ import (
 	"parrot/internal/engine"
 )
 
-func main() {
-	scanner := bufio.NewScanner(os.Stdin)
+func report(result engine.Result) int {
+	fmt.Fprint(os.Stdout, result.Stdout)
+	fmt.Fprint(os.Stderr, result.Stderr)
+	return result.ExitCode
+}
 
-	var app = engine.NewApp()
+func main() {
+	app := engine.NewApp()
+
+	// With a file named on the command line, run it instead of prompting.
+	if len(os.Args) > 1 {
+		src, err := os.ReadFile(os.Args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
+			os.Exit(127)
+		}
+		os.Exit(report(app.RunScript(string(src), os.Args[2:])))
+	}
+	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
 		fmt.Print("$ ")
@@ -23,20 +38,10 @@ func main() {
 			break
 		}
 
-		line := scanner.Text()
-
-		if line == "exit" {
-			break
-		}
-
-		res := app.Execute(line)
-
-		// Stdout and Stderr go to the real streams so redirection
-		if res.Stdout != "" {
-			fmt.Fprint(os.Stdout, res.Stdout)
-		}
-		if res.Stderr != "" {
-			fmt.Fprint(os.Stderr, res.Stderr)
+		result := app.Execute(scanner.Text())
+		status := report(result)
+		if result.Exited {
+			os.Exit(status)
 		}
 	}
 

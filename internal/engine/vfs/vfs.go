@@ -181,9 +181,9 @@ func (f *VFS) Write(path string, b []byte, writeAppend bool) error {
 		return ErrIsDir
 	}
 	if writeAppend {
-		nodeFile.append(b)
+		nodeFile.Append(b)
 	} else {
-		nodeFile.override(b)
+		nodeFile.Override(b)
 	}
 	return nil
 
