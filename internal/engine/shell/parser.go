@@ -333,14 +333,14 @@ func (p *parser) funcDef() (Cmd, error) {
 
 }
 
-var redirects = map[string]bool{">": true, ">>": true, "<": true, "2>": true, "2>>": true, "2>&1": true}
+var redirects = map[string]bool{">": true, ">>": true, "<": true, "2>": true, "2>>": true, "2>&1": true, ">&2": true}
 
 func (p *parser) simple() (Cmd, error) {
 	cmd := &Simple{}
 	for {
 		if redirects[p.tok().Op] {
 			redirect := Redirect{Op: p.next().Op}
-			if redirect.Op != "2>&1" { // this one names a stream, not a file
+			if redirect.Op != "2>&1" && redirect.Op != ">&2" { // these name a stream, not a file
 				if !p.tok().IsWord() {
 					return nil, p.unexpected()
 				}

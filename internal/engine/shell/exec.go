@@ -272,6 +272,10 @@ func (sh *Shell) redirect(redirs []Redirect, streams Streams) (Streams, error) {
 			streams.Err = streams.Out // send errors wherever output goes
 			continue
 		}
+		if redirect.Op == ">&2" {
+			streams.Out = streams.Err
+			continue
+		}
 
 		name, err := sh.expandOne(redirect.Target, streams)
 		if err != nil {
@@ -309,20 +313,19 @@ func (w fileWriter) Write(p []byte) (int, error) {
 }
 
 func (sh *Shell) openWrite(name string, appending bool) (io.Writer, error) {
-	node, err := sh.fs.Resolve(name)
-	if err != nil {
+	if _, err := sh.fs.Resolve(name); err != nil {
 		if err := sh.fs.Create(name); err != nil {
 			return nil, fmt.Errorf("%s: %v", name, err)
 		}
-		if node, err = sh.fs.Resolve(name); err != nil {
-			return nil, fmt.Errorf("%s: %v", name, err)
-		}
 	}
-	if node.IsDir() {
-		return nil, fmt.Errorf("%s: is a directory", name)
+	// An empty Write is the permission and directory check, and truncates
+	// the file when not appending. The writer after it can skip the checks.
+	if err := sh.fs.Write(name, nil, appending); err != nil {
+		return nil, fmt.Errorf("%s: %v", name, err)
 	}
-	if !appending {
-		node.Override(nil)
+	node, err := sh.fs.Resolve(name)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", name, err)
 	}
 	return fileWriter{node}, nil
 }
@@ -397,12 +400,18 @@ func (sh *Shell) source(args []string, io Streams) int {
 		fmt.Fprintf(io.Err, "prt: source: %s: %v\n", args[0], err)
 		return 1
 	}
+	if sh.calls >= maxCalls {
+		fmt.Fprintf(io.Err, "prt: source: %s: nested too deeply\n", args[0])
+		return 1
+	}
 
 	saved := sh.params
 	if len(args) > 1 {
 		sh.params = args[1:]
 	}
+	sh.calls++
 	status := sh.Run(string(content), io)
+	sh.calls--
 	sh.params = saved
 	return status
 }

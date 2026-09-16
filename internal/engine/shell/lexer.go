@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-
 type Quote int
+
 const (
-	Bare Quote = iota  // no quote
+	Bare Quote = iota // no quote
 	Double
 	Single
 )
@@ -17,7 +17,6 @@ type Piece struct {
 	Text  string
 	Quote Quote
 }
-
 
 type Word []Piece
 
@@ -28,7 +27,7 @@ type Token struct {
 
 func (t Token) IsWord() bool { return t.Op == "" }
 
-var operators = []string{"2>&1", "2>>", "2>", ">>", "&&", "||", "\n", ";", "|", "<", ">", "(", ")"}
+var operators = []string{"2>&1", ">&2", "2>>", "2>", ">>", "&&", "||", "\n", ";", "|", "&", "<", ">", "(", ")"}
 
 const wordEnd = " \t\r\n;|&<>()"
 
@@ -69,7 +68,6 @@ func matchOperator(src string) string {
 	}
 	return ""
 }
-
 
 func lexWord(src string, i int) (Word, int, error) {
 	var word Word
