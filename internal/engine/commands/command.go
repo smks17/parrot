@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"maps"
 	"parrot/internal/engine/vfs"
@@ -23,6 +25,27 @@ type Context struct {
 	Stderr  io.Writer
 	Env     map[string]string
 	History []string
+}
+
+// input is what a filter reads: stdin when no files are named, otherwise the
+// files concatenated. A non-zero exit means an error was already printed.
+func input(ctx *Context, name string, files []string) (io.Reader, int) {
+	if len(files) == 0 {
+		if ctx.Stdin == nil {
+			return strings.NewReader(""), 0
+		}
+		return ctx.Stdin, 0
+	}
+	readers := make([]io.Reader, 0, len(files))
+	for _, file := range files {
+		content, err := ctx.VFS.Read(file)
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", name, file, err)
+			return nil, 1
+		}
+		readers = append(readers, bytes.NewReader(content))
+	}
+	return io.MultiReader(readers...), 0
 }
 
 var registry = map[string]Command{}
