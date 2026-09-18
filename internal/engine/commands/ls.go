@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 type Ls struct{}
@@ -86,9 +87,9 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 
 	tw := tabwriter.NewWriter(ctx.Stdout, 0, 4, 1, ' ', 0)
 	for _, row := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			row.node.Mode, row.links(), row.node.Owner, row.node.Group,
-			fmt.Sprintf("%*s", width, row.size()), row.name)
+			fmt.Sprintf("%*s", width, row.size()), row.modTime(), row.name)
 	}
 	tw.Flush()
 	return 0
@@ -110,6 +111,15 @@ func (r lsRow) links() string {
 		return strconv.Itoa(n)
 	}
 	return "1"
+}
+
+func (r lsRow) modTime() string {
+	t := r.node.ModTime
+	now := time.Now()
+	if t.After(now.AddDate(0, -6, 0)) && t.Before(now.Add(time.Hour)) {
+		return t.Format("Jan _2 15:04")
+	}
+	return t.Format("Jan _2  2006")
 }
 
 func (r lsRow) size() string {
