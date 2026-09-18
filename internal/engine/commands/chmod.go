@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -58,13 +57,13 @@ func (c Chmod) Run(ctx *Context, args []string) int {
 	changeMod = func(n *vfs.Node) error {
 		err := ctx.VFS.ChmodNode(n, mode)
 		if err != nil {
-			return errors.New(fmt.Sprintf("%s: %s: %v\n", c.Name(), n.Path(), err))
+			return fmt.Errorf("%s: %s: %v\n", c.Name(), n.Path(), err)
 		}
 		return nil
 	}
 	err = node.Walk(changeMod)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr, err.Error())
+		fmt.Fprint(ctx.Stderr, err.Error())
 		exit = 1
 	}
 	return exit

@@ -4,13 +4,14 @@ import (
 	"path"
 	"sort"
 	"strings"
+
+	"parrot/internal/engine/user"
 )
 
 type VFS struct {
-	root  *Node
-	cwd   *Node
-	user  string
-	group string
+	root *Node
+	cwd  *Node
+	id   user.Identity
 }
 
 const (
@@ -34,27 +35,35 @@ func New() *VFS {
 		"Welcome.\n\nYou are in a terminal that isn't quite real.\nTry: ls, cd, cat\n",
 	)))
 
-	return &VFS{
-		root:  root,
-		cwd:   home.Children[HomeUser],
-		user:  HomeUser,
-		group: HomeGroup,
-	}
+	seedEtc(root)
+
+	root.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
+	home.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
+	root.Children["README.md"].setOwner(user.RootName, user.RootGroup, 0644)
+	root.AddChild(NewDir(user.RootName).
+		setOwner(user.RootName, user.RootGroup, 0700|ModeDirectory))
+	root.Children["club"].setOwner(user.RootName, user.DevGroup, 0770|ModeDirectory)
+
+	return &VFS{root: root, cwd: home.Children[HomeUser]}
 }
 
 func FromRoot(root *Node, cwd string) *VFS {
-	f := &VFS{root: root, cwd: root, user: HomeUser, group: HomeGroup}
+	seedEtc(root)
+
+	f := &VFS{root: root, cwd: root}
 	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
 		f.cwd = dir
 	}
 	return f
 }
 
-func (f *VFS) SetUser(user, group string) {
-	// TODO: check existing user, group
-	f.user = user
-	f.group = group
-}
+func (f *VFS) SetIdentity(id user.Identity) { f.id = id }
+
+func (f *VFS) Identity() user.Identity { return f.id }
+
+func (f *VFS) User() string { return f.id.Name }
+
+func (f *VFS) Group() string { return f.id.Primary() }
 
 func (f *VFS) Cwd() string {
 	return f.cwd.Path()
@@ -333,9 +342,19 @@ func (f *VFS) Chown(path, owner, group string) error {
 }
 
 func (f *VFS) ChownNode(n *Node, owner, group string) error {
-	if err := f.checkOwnership(n); err != nil {
-		return err
+	if n == nil {
+		return ErrNotExist
 	}
+
+	if !f.id.IsRoot() {
+		if owner != "" {
+			return ErrNotOwner
+		}
+		if group != "" && (n.Owner != f.id.Name || !f.id.InGroup(group)) {
+			return ErrNotOwner
+		}
+	}
+
 	if owner != "" {
 		n.Owner = owner
 	}
