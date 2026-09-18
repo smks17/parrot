@@ -33,7 +33,7 @@ type Shell struct {
 	params  []string // the arguments a script was given, $1 onwards
 	status  int      // the exit status of the last command, $?
 	calls   int      // how deep we are in function calls
-	History []string
+	History []commands.HistoryEntry
 
 	// control is set by break, continue, return and exit; the loop, function
 	// or shell they were meant for clears it again.

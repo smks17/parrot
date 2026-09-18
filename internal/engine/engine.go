@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"time"
 
+	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
@@ -80,7 +82,7 @@ func (app *App) Execute(line string) Result {
 	if strings.TrimSpace(line) == "" {
 		return Result{Cwd: session.fs.Cwd(), User: app.session.User()}
 	}
-	session.shell.History = append(session.shell.History, line)
+	session.shell.History = append(session.shell.History, commands.HistoryEntry{Line: line, At: time.Now()})
 	return session.run(line)
 }
 

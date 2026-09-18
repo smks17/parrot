@@ -2,7 +2,9 @@ package engine
 
 import (
 	"encoding/json"
+	"time"
 
+	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
@@ -12,16 +14,43 @@ type snapshot struct {
 	Root    *vfs.DumpNode     `json:"root"`
 	Cwd     string            `json:"cwd"`
 	Env     map[string]string `json:"env"`
-	History []string          `json:"history"`
+	History []historyRecord   `json:"history"`
 	User    string            `json:"user,omitempty"`
 }
 
+type historyRecord struct {
+	Line string `json:"line"`
+	At   int64  `json:"at,omitempty"`
+}
+
+func (h *historyRecord) UnmarshalJSON(data []byte) error {
+	var line string
+	if err := json.Unmarshal(data, &line); err == nil {
+		h.Line, h.At = line, 0
+		return nil
+	}
+	type record historyRecord
+	var r record
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	*h = historyRecord(r)
+	return nil
+}
+
 func (s *Session) Snapshot() ([]byte, error) {
+	history := make([]historyRecord, len(s.shell.History))
+	for i, entry := range s.shell.History {
+		history[i] = historyRecord{Line: entry.Line}
+		if !entry.At.IsZero() {
+			history[i].At = entry.At.Unix()
+		}
+	}
 	snap := snapshot{
 		Root:    s.fs.RootNode().Dump(),
 		Cwd:     s.fs.Cwd(),
 		Env:     s.shell.Vars(),
-		History: s.shell.History,
+		History: history,
 		User:    s.User(),
 	}
 	return json.Marshal(snap)
@@ -47,6 +76,13 @@ func LoadSession(data []byte) (*Session, error) {
 	if snap.Env != nil {
 		session.shell.SetVars(snap.Env)
 	}
-	session.shell.History = append([]string(nil), snap.History...)
+	history := make([]commands.HistoryEntry, len(snap.History))
+	for i, record := range snap.History {
+		history[i] = commands.HistoryEntry{Line: record.Line}
+		if record.At != 0 {
+			history[i].At = time.Unix(record.At, 0)
+		}
+	}
+	session.shell.History = append([]commands.HistoryEntry(nil), history...)
 	return session, nil
 }
