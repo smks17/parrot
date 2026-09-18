@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/user"
@@ -16,6 +17,12 @@ type snapshot struct {
 	Env     map[string]string `json:"env"`
 	History []historyRecord   `json:"history"`
 	User    string            `json:"user,omitempty"`
+	// Clock is how far `date -s` moved the shell's clock, in nanoseconds, and
+	// Zone/ZoneOffset is the host zone it was saved in — a shared session
+	// shows the same times to whoever opens it. TZ rides along in Env.
+	Clock      int64  `json:"clock_offset,omitempty"`
+	Zone       string `json:"zone,omitempty"`
+	ZoneOffset int    `json:"zone_offset,omitempty"`
 }
 
 type historyRecord struct {
@@ -52,7 +59,9 @@ func (s *Session) Snapshot() ([]byte, error) {
 		Env:     s.shell.Vars(),
 		History: history,
 		User:    s.User(),
+		Clock:   int64(clock.Offset()),
 	}
+	snap.Zone, snap.ZoneOffset = clock.Local()
 	return json.Marshal(snap)
 }
 
@@ -60,6 +69,11 @@ func LoadSession(data []byte) (*Session, error) {
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
+	}
+
+	clock.SetOffset(time.Duration(snap.Clock))
+	if snap.Zone != "" {
+		clock.SetLocal(snap.Zone, snap.ZoneOffset)
 	}
 
 	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd)

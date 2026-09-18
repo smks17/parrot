@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"parrot/internal/engine/clock"
 	"strings"
 	"time"
 )
@@ -29,7 +30,7 @@ func NewFile(name string, content []byte) *Node {
 		Owner: HomeUser,
 		Group: HomeGroup,
 
-		ModTime: time.Now(),
+		ModTime: clock.Now(),
 	}
 }
 
@@ -44,7 +45,7 @@ func NewDir(name string) *Node {
 		Owner: HomeUser,
 		Group: HomeGroup,
 
-		ModTime: time.Now(),
+		ModTime: clock.Now(),
 	}
 }
 
@@ -113,7 +114,7 @@ func (n *Node) Clone() *Node {
 }
 
 func (node *Node) Touch() {
-	node.ModTime = time.Now()
+	node.ModTime = clock.Now()
 }
 
 func (node *Node) Override(content []byte) {
