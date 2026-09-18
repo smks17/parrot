@@ -1,7 +1,7 @@
 package user
 
 import (
-	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,10 +33,13 @@ const (
 		"dev:x:100:mahdi\n"
 )
 
-var (
-	ErrNoUser  = errors.New("invalid user")
-	ErrNoGroup = errors.New("invalid group")
-)
+func ErrNoUser(name string) error {
+	return fmt.Errorf("invalid user: %s", name)
+}
+
+func ErrNoGroup(name string) error {
+	return fmt.Errorf("invalid group: %s", name)
+}
 
 type Group struct {
 	Name string
@@ -158,7 +161,7 @@ func (d *DB) Lookup(name string) (Identity, error) {
 	entries := parsePasswd(d.read(PasswdPath))
 	i := slices.IndexFunc(entries, func(p passwdEntry) bool { return p.Name == name })
 	if i < 0 {
-		return Identity{}, ErrNoUser
+		return Identity{}, ErrNoUser(name)
 	}
 	p := entries[i]
 
