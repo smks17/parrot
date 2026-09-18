@@ -56,7 +56,7 @@ export default function Terminal() {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
-  }, [entries])
+  }, [entries, completions])
 
   // autoFocus on the <input> only fires once, at mount — and the input is
   // still `disabled` at that point (the engine hasn't loaded yet), so
