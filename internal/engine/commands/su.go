@@ -17,7 +17,7 @@ func (c Su) Run(ctx *Context, args []string) int {
 	}
 	err := ctx.SetUser(name)
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr, "%s: %s'\n", c.Name(), err.Error())
+		fmt.Fprintf(ctx.Stderr, "%s: %v\n", c.Name(), err)
 		return 1
 	}
 	return 0
