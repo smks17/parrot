@@ -14,13 +14,13 @@ func main() {
 	js.Global().Set("execute", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 1 || args[0].Type() != js.TypeString {
 			return map[string]any{"stdout": "", "stderr": "execute: expected a string",
-				"exitCode": 2, "cwd": app.Cwd()}
+				"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
 		}
 		defer func() {
 			if r := recover(); r != nil {
 				result = map[string]any{
 					"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd(),
+					"exitCode": 2, "cwd": app.Cwd(), "user": app.User(),
 				}
 			}
 		}()
@@ -30,6 +30,7 @@ func main() {
 			"stderr":   r.Stderr,
 			"exitCode": r.ExitCode,
 			"cwd":      r.Cwd,
+			"user":     r.User,
 		}
 	}))
 
@@ -53,18 +54,19 @@ func main() {
 	js.Global().Set("upload", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 2 || args[0].Type() != js.TypeString {
 			return map[string]any{"stdout": "", "stderr": "upload: expected a path and bytes",
-				"exitCode": 2, "cwd": app.Cwd()}
+				"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
 		}
 		defer func() {
 			if r := recover(); r != nil {
 				result = map[string]any{"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd()}
+					"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
 			}
 		}()
 		data := make([]byte, args[1].Get("length").Int())
 		js.CopyBytesToGo(data, args[1])
 		r := app.Upload(args[0].String(), data)
-		return map[string]any{"stdout": r.Stdout, "stderr": r.Stderr, "exitCode": r.ExitCode, "cwd": r.Cwd}
+		return map[string]any{"stdout": r.Stdout, "stderr": r.Stderr, "exitCode": r.ExitCode,
+			"cwd": r.Cwd, "user": r.User}
 	}))
 
 	js.Global().Set("snapshot", js.FuncOf(func(this js.Value, args []js.Value) (result any) {

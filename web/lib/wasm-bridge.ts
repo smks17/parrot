@@ -3,6 +3,7 @@ export interface ExecResult {
   stderr: string;
   exitCode: number;
   cwd: string;
+  user: string;
 }
 
 declare global {

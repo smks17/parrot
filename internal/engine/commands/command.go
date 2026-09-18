@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 	"slices"
 	"strings"
@@ -25,6 +26,9 @@ type Context struct {
 	Stderr  io.Writer
 	Env     map[string]string
 	History []string
+
+	User    user.Identity
+	SetUser func(name string) error
 }
 
 // input is what a filter reads: stdin when no files are named, otherwise the

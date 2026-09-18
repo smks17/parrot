@@ -41,6 +41,11 @@ func NewDir(name string) *Node {
 	}
 }
 
+func (node *Node) setOwner(owner, group string, mode FileMode) *Node {
+	node.Owner, node.Group, node.Mode = owner, group, mode
+	return node
+}
+
 func (node *Node) IsDir() bool {
 	return node.Mode.IsDirectory()
 }

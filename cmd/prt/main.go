@@ -29,7 +29,12 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print("$ ")
+		// root gets "#", like a real shell — su has to be visible somewhere.
+		sigil := "$"
+		if app.User() == "root" {
+			sigil = "#"
+		}
+		fmt.Printf("%s%s ", app.User(), sigil)
 
 		// Scan reports false for both EOF and read errors; the error itself
 		// is checked after the loop.

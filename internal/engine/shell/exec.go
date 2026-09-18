@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
 
@@ -38,6 +39,9 @@ type Shell struct {
 	// or shell they were meant for clears it again.
 	control control
 	code    int
+
+	user    user.Identity
+	SetUser func(name string) error
 }
 
 type control int
@@ -50,8 +54,8 @@ const (
 	exiting
 )
 
-func New(fs *vfs.VFS) *Shell {
-	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}}
+func New(fs *vfs.VFS, setUser func(name string) error) *Shell {
+	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SetUser: setUser}
 }
 
 func (sh *Shell) Vars() map[string]string { return sh.vars }
@@ -258,6 +262,8 @@ func (sh *Shell) context(io Streams) *commands.Context {
 		Stderr:  io.Err,
 		Env:     sh.vars,
 		History: sh.History,
+		User:    sh.fs.Identity(),
+		SetUser: sh.SetUser,
 	}
 }
 

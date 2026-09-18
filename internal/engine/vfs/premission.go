@@ -107,13 +107,13 @@ const (
 )
 
 func (f *VFS) getPermClass(n *Node) PermClass {
-	if n.Owner == f.user {
+	if n.Owner == f.id.Name {
 		return UserPerm
-	} else if n.Group == f.group {
-		return GroupPerm
-	} else {
-		return OtherUserPerm
 	}
+	if f.id.InGroup(n.Group) {
+		return GroupPerm
+	}
+	return OtherUserPerm
 }
 
 // checkPerm is the gate in front of every VFS operation. It compares the
@@ -122,6 +122,9 @@ func (f *VFS) getPermClass(n *Node) PermClass {
 func (f *VFS) checkPerm(n *Node, need permBits) error {
 	if n == nil {
 		return ErrNotExist
+	}
+	if f.id.IsRoot() {
+		return nil
 	}
 
 	permClass := f.getPermClass(n)
@@ -144,7 +147,10 @@ func (f *VFS) checkOwnership(n *Node) error {
 	if n == nil {
 		return ErrNotExist
 	}
-	if n.Owner != "" && n.Owner != f.user {
+	if f.id.IsRoot() {
+		return nil
+	}
+	if n.Owner != "" && n.Owner != f.id.Name {
 		return ErrNotOwner
 	}
 	return nil
