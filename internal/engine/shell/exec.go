@@ -262,7 +262,7 @@ func (sh *Shell) context(io Streams) *commands.Context {
 		Stderr:  io.Err,
 		Env:     sh.vars,
 		History: sh.History,
-		User:    sh.user,
+		User:    sh.fs.Identity(),
 		SetUser: sh.SetUser,
 	}
 }

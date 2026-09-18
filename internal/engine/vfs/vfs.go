@@ -12,6 +12,7 @@ type VFS struct {
 	root *Node
 	cwd  *Node
 	id   user.Identity
+	db   *user.DB
 }
 
 const (
@@ -44,16 +45,22 @@ func New() *VFS {
 		setOwner(user.RootName, user.RootGroup, 0700|ModeDirectory))
 	root.Children["club"].setOwner(user.RootName, user.DevGroup, 0770|ModeDirectory)
 
-	return &VFS{root: root, cwd: home.Children[HomeUser]}
+	return newVFS(root, home.Children[HomeUser])
 }
 
 func FromRoot(root *Node, cwd string) *VFS {
 	seedEtc(root)
 
-	f := &VFS{root: root, cwd: root}
+	f := newVFS(root, root)
 	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
 		f.cwd = dir
 	}
+	return f
+}
+
+func newVFS(root, cwd *Node) *VFS {
+	f := &VFS{root: root, cwd: cwd}
+	f.db = user.NewDB(f)
 	return f
 }
 
@@ -344,6 +351,13 @@ func (f *VFS) Chown(path, owner, group string) error {
 func (f *VFS) ChownNode(n *Node, owner, group string) error {
 	if n == nil {
 		return ErrNotExist
+	}
+
+	if owner != "" && !f.db.UserExists(owner) {
+		return user.ErrNoUser(owner)
+	}
+	if group != "" && !f.db.GroupExists(group) {
+		return user.ErrNoGroup(group)
 	}
 
 	if !f.id.IsRoot() {
