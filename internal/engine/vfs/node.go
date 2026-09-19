@@ -1,7 +1,9 @@
 package vfs
 
 import (
+	"parrot/internal/engine/clock"
 	"strings"
+	"time"
 )
 
 type Node struct {
@@ -13,6 +15,8 @@ type Node struct {
 	Mode  FileMode // rwx bits for owner/group/other
 	Owner string   // username, e.g. "mahdi"
 	Group string   // group name, e.g. "users"
+
+	ModTime time.Time
 }
 
 func NewFile(name string, content []byte) *Node {
@@ -25,6 +29,8 @@ func NewFile(name string, content []byte) *Node {
 		Mode:  DefaultFileMode,
 		Owner: HomeUser,
 		Group: HomeGroup,
+
+		ModTime: clock.Now(),
 	}
 }
 
@@ -38,6 +44,8 @@ func NewDir(name string) *Node {
 		Mode:  DefaultDirMode,
 		Owner: HomeUser,
 		Group: HomeGroup,
+
+		ModTime: clock.Now(),
 	}
 }
 
@@ -73,10 +81,13 @@ func (node *Node) Path() string {
 func (node *Node) AddChild(child *Node) {
 	node.Children[child.Name] = child
 	child.Parent = node
+	child.Touch()
+	node.Touch()
 }
 
 func (node *Node) removeChild(name string) {
 	delete(node.Children, name)
+	node.Touch()
 }
 
 func (n *Node) Clone() *Node {
@@ -102,12 +113,18 @@ func (n *Node) Clone() *Node {
 	return newNode
 }
 
+func (node *Node) Touch() {
+	node.ModTime = clock.Now()
+}
+
 func (node *Node) Override(content []byte) {
 	node.Content = content
+	node.Touch()
 }
 
 func (node *Node) Append(content []byte) {
 	node.Content = append(node.Content, content...)
+	node.Touch()
 }
 
 type DumpNode struct {
@@ -121,10 +138,17 @@ type DumpNode struct {
 	Mode  *FileMode `json:"mode,omitempty"`
 	Owner string    `json:"owner,omitempty"`
 	Group string    `json:"group,omitempty"`
+
+	// Mtime is Unix seconds.
+	Mtime int64 `json:"mtime,omitempty"`
 }
 
 func (n *Node) Dump() *DumpNode {
 	d := &DumpNode{Name: n.Name, Content: n.Content, Mode: &n.Mode, Owner: n.Owner, Group: n.Group}
+	// A zero Time means "unknown"
+	if !n.ModTime.IsZero() {
+		d.Mtime = n.ModTime.Unix()
+	}
 	for _, child := range n.Children {
 		d.Children = append(d.Children, child.Dump())
 	}
@@ -141,6 +165,9 @@ func (d *DumpNode) ToNode() *Node {
 	n.Mode = *d.Mode
 	n.Owner = d.Owner
 	n.Group = d.Group
+	if d.Mtime != 0 {
+		n.ModTime = time.Unix(d.Mtime, 0)
+	}
 	for _, child := range d.Children {
 		n.AddChild(child.ToNode())
 	}

@@ -8,30 +8,36 @@ import (
 	"syscall/js"
 )
 
+// reply is the shape the browser reads every command through.
+func reply(r engine.Result) map[string]any {
+	return map[string]any{
+		"stdout":   r.Stdout,
+		"stderr":   r.Stderr,
+		"exitCode": r.ExitCode,
+		"cwd":      r.Cwd,
+		"user":     r.User,
+		"at":       r.At,
+	}
+}
+
+// fail is the same shape for what never reached the engine.
+func fail(app *engine.App, message string) map[string]any {
+	return reply(engine.Result{Stderr: message, ExitCode: 2, Cwd: app.Cwd(), User: app.User(), At: app.Now()})
+}
+
 func main() {
 	js.Global().Set("__engineReady", js.ValueOf(true))
 	var app = engine.NewApp()
 	js.Global().Set("execute", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 1 || args[0].Type() != js.TypeString {
-			return map[string]any{"stdout": "", "stderr": "execute: expected a string",
-				"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
+			return fail(app, "execute: expected a string")
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				result = map[string]any{
-					"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd(), "user": app.User(),
-				}
+				result = fail(app, fmt.Sprintf("internal error: %v", r))
 			}
 		}()
-		r := app.Execute(args[0].String())
-		return map[string]any{
-			"stdout":   r.Stdout,
-			"stderr":   r.Stderr,
-			"exitCode": r.ExitCode,
-			"cwd":      r.Cwd,
-			"user":     r.User,
-		}
+		return reply(app.Execute(args[0].String()))
 	}))
 
 	js.Global().Set("complete", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
@@ -53,20 +59,16 @@ func main() {
 
 	js.Global().Set("upload", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 2 || args[0].Type() != js.TypeString {
-			return map[string]any{"stdout": "", "stderr": "upload: expected a path and bytes",
-				"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
+			return fail(app, "upload: expected a path and bytes")
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				result = map[string]any{"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd(), "user": app.User()}
+				result = fail(app, fmt.Sprintf("internal error: %v", r))
 			}
 		}()
 		data := make([]byte, args[1].Get("length").Int())
 		js.CopyBytesToGo(data, args[1])
-		r := app.Upload(args[0].String(), data)
-		return map[string]any{"stdout": r.Stdout, "stderr": r.Stderr, "exitCode": r.ExitCode,
-			"cwd": r.Cwd, "user": r.User}
+		return reply(app.Upload(args[0].String(), data))
 	}))
 
 	js.Global().Set("snapshot", js.FuncOf(func(this js.Value, args []js.Value) (result any) {

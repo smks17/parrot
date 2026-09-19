@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"errors"
 	"path"
 	"sort"
 	"strings"
@@ -292,6 +293,11 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 	}
 	newNode := srcNode.Clone()
 	newNode.Name = name
+	// TODO: It should be handle in node.go
+	newNode.Walk(func(n *Node) error {
+		n.Touch()
+		return nil
+	})
 	parent.AddChild(newNode)
 	return nil
 }
@@ -375,5 +381,20 @@ func (f *VFS) ChownNode(n *Node, owner, group string) error {
 	if group != "" {
 		n.Group = group
 	}
+	return nil
+}
+
+func (f *VFS) Touch(path string) error {
+	node, err := f.Resolve(path)
+	if err != nil {
+		if errors.Is(err, ErrNotExist) {
+			return f.Create(path)
+		}
+		return err
+	}
+	if err := f.checkPerm(node, permWrite); err != nil {
+		return err
+	}
+	node.Touch()
 	return nil
 }

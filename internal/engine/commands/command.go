@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"parrot/internal/engine/clock"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 	"slices"
 	"strings"
+	"time"
 )
 
 type Command interface {
@@ -19,16 +21,27 @@ type Command interface {
 
 type Hidden interface{ Hidden() bool }
 
+type HistoryEntry struct {
+	Line string
+	At   time.Time
+}
+
 type Context struct {
 	VFS     *vfs.VFS
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Env     map[string]string
-	History []string
+	History []HistoryEntry
 
 	User    user.Identity
 	SetUser func(name string) error
+}
+
+// now is the shell's clock, in the zone TZ names. Without TZ it stays on the
+// host's own zone — in the browser that is whatever the tab is set to.
+func now(ctx *Context) time.Time {
+	return clock.In(ctx.Env["TZ"])
 }
 
 // input is what a filter reads: stdin when no files are named, otherwise the
