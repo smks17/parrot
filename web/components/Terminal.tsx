@@ -6,6 +6,7 @@ import { fetchSession } from "@/lib/backend";
 import styles from "./Terminal.module.css";
 
 interface Entry {
+  at: string;
   user: string;
   cwd: string;
   line: string;
@@ -79,7 +80,7 @@ export default function Terminal() {
     const res = execute(line);
     // The entry keeps the prompt the line was typed at, so a `su` shows up
     // on the next line rather than rewriting its own.
-    setEntries((prev) => [...prev, { user, cwd, line, stdout: res.stdout, stderr: res.stderr }]);
+    setEntries((prev) => [...prev, { at: res.at, user, cwd, line, stdout: res.stdout, stderr: res.stderr }]);
     setCwd(res.cwd);
     setUser(res.user);
     setHistory((prev) => [...prev, line]);
@@ -175,6 +176,7 @@ export default function Terminal() {
     setEntries((prev) => [
       ...prev,
       ...results.map(({ file, res }) => ({
+        at: res.at,
         user,
         cwd,
         line: `upload ${file.name}`,
@@ -209,6 +211,7 @@ export default function Terminal() {
         {entries.map((entry, i) => (
           <div key={i} className={styles.entry}>
             <div className={styles.promptLine}>
+              {entry.at && <span className={styles.stamp}>[{entry.at}]</span>}
               <span className={styles.prompt}>{promptFor(entry.user, entry.cwd)}</span>{" "}
               <span>{entry.line}</span>
             </div>
