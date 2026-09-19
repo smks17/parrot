@@ -64,6 +64,12 @@ func (s *Session) SetUser(name string) error {
 
 func (s *Session) User() string { return s.fs.Identity().Name }
 
+// at is the wall clock the shell believes in — TZ and `date -s` included.
+func (s *Session) at() string { return clock.In(s.shell.Vars()["TZ"]).Format("15:04:05") }
+
+// Now is that clock, for callers outside a command's result.
+func (app *App) Now() string { return app.session.at() }
+
 func (s *Session) Group() string { return s.fs.Identity().Primary() }
 
 // Result is what one line of input produced.
@@ -74,13 +80,14 @@ type Result struct {
 	Cwd      string // lets the UI render the prompt without a second call
 	Exited   bool   // the script asked the shell to close
 	User     string // ...and who it belongs to, so `su` is visible in it
+	At       string // the shell clock when it ran, for the UI to stamp the line
 }
 
 // Execute runs one line of input and collects everything it wrote.
 func (app *App) Execute(line string) Result {
 	session := app.session
 	if strings.TrimSpace(line) == "" {
-		return Result{Cwd: session.fs.Cwd(), User: app.session.User()}
+		return Result{Cwd: session.fs.Cwd(), User: app.session.User(), At: session.at()}
 	}
 	session.shell.History = append(session.shell.History, commands.HistoryEntry{Line: line, At: clock.Now()})
 	return session.run(line)
@@ -109,18 +116,19 @@ func (s *Session) run(src string) Result {
 		Cwd:      s.fs.Cwd(),
 		Exited:   exited,
 		User:     s.User(),
+		At:       s.at(),
 	}
 }
 
 // Upload writes a file into the session's filesystem.
 func (app *App) Upload(path string, data []byte) Result {
 	if err := app.session.fs.Create(path); err != nil {
-		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.fs.Cwd(), User: app.session.User()}
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.fs.Cwd(), User: app.session.User(), At: app.session.at()}
 	}
 	if err := app.session.fs.Write(path, data, false); err != nil {
-		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.fs.Cwd(), User: app.session.User()}
+		return Result{Stderr: fmt.Sprintf("upload: %s: %v\n", path, err), ExitCode: 1, Cwd: app.session.fs.Cwd(), User: app.session.User(), At: app.session.at()}
 	}
-	return Result{ExitCode: 0, Cwd: app.session.fs.Cwd(), User: app.session.User()}
+	return Result{ExitCode: 0, Cwd: app.session.fs.Cwd(), User: app.session.User(), At: app.session.at()}
 }
 
 func (app *App) Cwd() string { return app.session.Cwd() }

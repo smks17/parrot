@@ -36,6 +36,9 @@ func Zone(tz string) *time.Location {
 	return loc
 }
 
+// In is Now in the zone TZ names.
+func In(tz string) time.Time { return Now().In(Zone(tz)) }
+
 // Local reports the zone in use when TZ is unset, as a name and its offset in
 // seconds east of UTC — the pair a snapshot stores.
 func Local() (string, int) { return Now().In(local).Zone() }
