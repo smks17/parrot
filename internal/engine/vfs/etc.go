@@ -2,7 +2,6 @@ package vfs
 
 import (
 	"path"
-	"strings"
 
 	"parrot/internal/engine/user"
 )
@@ -36,25 +35,4 @@ func seedEtc(root *Node) {
 		etc.AddChild(NewFile(f.name, []byte(f.content)).
 			setOwner(user.RootName, user.RootGroup, 0644))
 	}
-}
-
-func (f *VFS) ReadRaw(p string) ([]byte, error) {
-	curr := f.root
-	for seg := range strings.SplitSeq(p, "/") {
-		if seg == "" || seg == "." {
-			continue
-		}
-		if !curr.IsDir() {
-			return nil, ErrNotDir
-		}
-		next, ok := curr.Children[seg]
-		if !ok {
-			return nil, ErrNotExist
-		}
-		curr = next
-	}
-	if curr.IsDir() {
-		return nil, ErrIsDir
-	}
-	return curr.Content, nil
 }

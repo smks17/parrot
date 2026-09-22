@@ -8,7 +8,6 @@ import (
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
-	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
 
@@ -39,7 +38,6 @@ func (app *App) Restore(data []byte) error {
 type Session struct {
 	fs    *vfs.VFS
 	shell *shell.Shell
-	users *user.DB
 }
 
 func NewSession() *Session {
@@ -48,13 +46,12 @@ func NewSession() *Session {
 		fs: filesystem, shell: shell.New(filesystem, nil),
 	}
 	s.shell.SetUser = s.SetUser
-	s.users = user.NewDB(filesystem)
 	s.SetUser(vfs.HomeUser)
 	return s
 }
 
 func (s *Session) SetUser(name string) error {
-	id, err := s.users.Lookup(name)
+	id, err := s.fs.UsersDB().Lookup(name)
 	if err != nil {
 		return err
 	}

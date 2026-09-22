@@ -60,10 +60,10 @@ func FromRoot(root *Node, cwd string) *VFS {
 }
 
 func newVFS(root, cwd *Node) *VFS {
-	f := &VFS{root: root, cwd: cwd}
-	f.db = user.NewDB(f)
-	return f
+	return &VFS{root: root, cwd: cwd, db: user.NewDB(accounts{root: root})}
 }
+
+func (f *VFS) UsersDB() *user.DB { return f.db }
 
 func (f *VFS) SetIdentity(id user.Identity) { f.id = id }
 

@@ -7,7 +7,6 @@ import (
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
-	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
 
@@ -79,7 +78,6 @@ func LoadSession(data []byte) (*Session, error) {
 	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd)
 	session := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
 	session.shell.SetUser = session.SetUser
-	session.users = user.NewDB(filesystem)
 
 	// A saved user who no longer exists — the account was deleted, or
 	// /etc/passwd was removed before saving
