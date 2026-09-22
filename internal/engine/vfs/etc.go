@@ -7,9 +7,13 @@ import (
 )
 
 func seedEtc(root *Node) {
-	files := []struct{ name, content string }{
-		{path.Base(user.PasswdPath), user.DefaultPasswd},
-		{path.Base(user.GroupPath), user.DefaultGroup},
+	files := []struct {
+		name, content string
+		mode          FileMode
+	}{
+		{path.Base(user.PasswdPath), user.DefaultPasswd, 0644},
+		{path.Base(user.GroupPath), user.DefaultGroup, 0644},
+		{path.Base(user.ShadowPath), user.DefaultShadow, 0600},
 	}
 
 	if !root.IsDir() {
@@ -33,6 +37,6 @@ func seedEtc(root *Node) {
 			continue
 		}
 		etc.AddChild(NewFile(f.name, []byte(f.content)).
-			setOwner(user.RootName, user.RootGroup, 0644))
+			setOwner(user.RootName, user.RootGroup, f.mode))
 	}
 }

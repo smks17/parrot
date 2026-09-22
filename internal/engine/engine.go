@@ -59,6 +59,19 @@ func (s *Session) SetUser(name string) error {
 	return nil
 }
 
+func (app *App) Login(name, password string) error { return app.session.Login(name, password) }
+
+func (s *Session) Login(name, password string) error {
+	if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+		return err
+	}
+	if err := s.SetUser(name); err != nil {
+		return err
+	}
+	s.fs.Chdir(s.fs.Identity().Home)
+	return nil
+}
+
 func (s *Session) User() string { return s.fs.Identity().Name }
 
 // at is the wall clock the shell believes in — TZ and `date -s` included.
