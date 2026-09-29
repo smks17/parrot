@@ -8,6 +8,7 @@ import (
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/shell"
+	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
 
@@ -18,15 +19,16 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{NewSession()}
+	users := user.InitUsers([]string{})
+	return &App{NewSession(users)}
 }
 
 func (app *App) Snapshot() ([]byte, error) {
 	return app.session.Snapshot()
 }
 
-func (app *App) Restore(data []byte) error {
-	session, err := LoadSession(data)
+func (app *App) Restore(data []byte, asUser string, rootUser *user.Identity) error {
+	session, err := LoadSession(data, asUser, rootUser)
 	if err != nil {
 		return err
 	}
@@ -40,13 +42,13 @@ type Session struct {
 	shell *shell.Shell
 }
 
-func NewSession() *Session {
-	filesystem := vfs.New()
+func NewSession(users []*user.Identity) *Session {
+	filesystem := vfs.New(users, users[0], users[0])
 	s := &Session{
 		fs: filesystem, shell: shell.New(filesystem, nil),
 	}
 	s.shell.SetUser = s.SetUser
-	s.SetUser(vfs.HomeUser)
+	// s.SetUser(vfs.HomeUser)
 	return s
 }
 
@@ -56,6 +58,9 @@ func (s *Session) SetUser(name string) error {
 		return err
 	}
 	s.fs.SetIdentity(id)
+	vars := s.shell.Vars()
+	vars[commands.EnvUser] = id.Name
+	vars[commands.EnvHome] = id.Home
 	return nil
 }
 
@@ -81,6 +86,10 @@ func (s *Session) at() string { return clock.In(s.shell.Vars()["TZ"]).Format("15
 func (app *App) Now() string { return app.session.at() }
 
 func (s *Session) Group() string { return s.fs.Identity().Primary() }
+
+func (app *App) Root() (user.Identity, error) {
+	return app.session.fs.RootUser()
+}
 
 // Result is what one line of input produced.
 type Result struct {

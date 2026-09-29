@@ -2,11 +2,7 @@ package commands
 
 import (
 	"fmt"
-	"parrot/internal/engine/vfs"
 )
-
-// homeDir is where a bare "cd" lands, matching the seed tree in vfs.New.
-var homeDir = "/home/" + vfs.HomeUser
 
 type Cd struct{}
 
@@ -19,7 +15,7 @@ func (cd Cd) Name() string {
 func (cd Cd) Usage() string { return "cd [path]  — change the working directory" }
 
 func (cd Cd) Run(ctx *Context, args []string) int {
-	path := homeDir
+	path := ctx.Home()
 	if len(args) > 0 {
 		path = args[0]
 	}

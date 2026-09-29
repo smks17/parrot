@@ -16,6 +16,8 @@ const (
 	RootName  = "root"
 	RootGroup = "root"
 	RootUID   = 0
+	RootGID   = 0
+	RootHome  = "/"
 
 	DevGroup = "dev"
 )
@@ -71,6 +73,14 @@ func (i Identity) Primary() string {
 
 func (i Identity) InGroup(name string) bool {
 	return slices.ContainsFunc(i.Groups, func(g Group) bool { return g.Name == name })
+}
+
+func InitUsers(feedUsers []string) []*Identity {
+	users := make([]*Identity, 0)
+	RootGroup := []Group{{Name: RootGroup, GID: RootGID}}
+	users = append(users, &Identity{Name: RootName, UID: RootUID, GID: RootGID, Home: RootHome, Groups: RootGroup})
+	// TODO: Add feed user
+	return users
 }
 
 // TODO: Later remove this and use fs interface
@@ -230,4 +240,8 @@ func (d *DB) UserExists(name string) bool {
 func (d *DB) GroupExists(name string) bool {
 	return slices.ContainsFunc(parseGroup(d.read(GroupPath)),
 		func(g groupEntry) bool { return g.Name == name })
+}
+
+func (d *DB) Root() (Identity, error) {
+	return d.Lookup(RootName)
 }
