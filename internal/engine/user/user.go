@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -16,8 +17,6 @@ const (
 	RootName  = "root"
 	RootGroup = "root"
 	RootUID   = 0
-	RootGID   = 0
-	RootHome  = "/"
 
 	DevGroup = "dev"
 )
@@ -40,6 +39,8 @@ const (
 	DefaultShadow = "root:$s$17599196$8c3d5e561246514ee9984634d373ed62017d2ab90b93707327f8fed69dd246f1\n" +
 		"mahdi:$s$8808f478$ecd15d612c4ded5c95abd2c81112454214346bf20ec3a8665e1f21105a5c83b1\n"
 )
+
+var ErrNoResident = errors.New("no unprivileged account")
 
 func ErrNoUser(name string) error {
 	return fmt.Errorf("invalid user: %s", name)
@@ -75,12 +76,26 @@ func (i Identity) InGroup(name string) bool {
 	return slices.ContainsFunc(i.Groups, func(g Group) bool { return g.Name == name })
 }
 
-func InitUsers(feedUsers []string) []*Identity {
-	users := make([]*Identity, 0)
-	RootGroup := []Group{{Name: RootGroup, GID: RootGID}}
-	users = append(users, &Identity{Name: RootName, UID: RootUID, GID: RootGID, Home: RootHome, Groups: RootGroup})
-	// TODO: Add feed user
-	return users
+func (d *DB) Resident() (Identity, error) {
+	for _, e := range parsePasswd(d.read(PasswdPath)) {
+		if e.UID == RootUID {
+			continue
+		}
+		return d.Lookup(e.Name)
+	}
+	return Identity{}, ErrNoResident
+}
+
+// Accounts lists every account /etc/passwd names, in file order.
+func (d *DB) Accounts() []Identity {
+	entries := parsePasswd(d.read(PasswdPath))
+	ids := make([]Identity, 0, len(entries))
+	for _, e := range entries {
+		if id, err := d.Lookup(e.Name); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // TODO: Later remove this and use fs interface

@@ -89,7 +89,7 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 	now := now(ctx)
 	for _, row := range rows {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.node.Mode, row.links(), row.node.Owner.Name, row.node.Owner.Primary(),
+			row.node.Mode, row.links(), row.node.Owner.User, row.node.Owner.Group,
 			fmt.Sprintf("%*s", width, row.size()), row.modTime(now), row.name)
 	}
 	tw.Flush()
