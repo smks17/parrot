@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"parrot/internal/engine/user"
 	"strings"
 )
 
@@ -27,15 +26,7 @@ func (c Chown) Run(ctx *Context, args []string) int {
 		return 1
 	}
 
-	id := ctx.VFS.Identity()
-	if owner != "" {
-		id.Name = owner
-	}
-	if group != "" {
-		id.Groups = []user.Group{user.Group{Name: group, GID: 0}} // TODO: GID
-	}
-
-	if err := ctx.VFS.Chown(path, id); err != nil {
+	if err := ctx.VFS.Chown(path, owner, group); err != nil {
 		fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", c.Name(), path, err)
 		return 1
 	}

@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+type Ownership struct {
+	User  string
+	Group string
+}
+
+func OwnedBy(id user.Identity) Ownership {
+	return Ownership{User: id.Name, Group: id.Primary()}
+}
+
 type Node struct {
 	Name     string
 	Content  []byte           // nil for directories
@@ -14,12 +23,12 @@ type Node struct {
 	Parent   *Node            // nil at root; makes ".." a pointer hop
 
 	Mode  FileMode // rwx bits for owner/group/other
-	Owner user.Identity
+	Owner Ownership
 
 	ModTime time.Time
 }
 
-func NewFile(name string, content []byte, owner user.Identity) *Node {
+func NewFile(name string, content []byte, owner Ownership) *Node {
 	return &Node{
 		Name:     name,
 		Content:  content,
@@ -33,7 +42,7 @@ func NewFile(name string, content []byte, owner user.Identity) *Node {
 	}
 }
 
-func NewDir(name string, owner user.Identity) *Node {
+func NewDir(name string, owner Ownership) *Node {
 	return &Node{
 		Name:     name,
 		Content:  nil,
@@ -48,10 +57,10 @@ func NewDir(name string, owner user.Identity) *Node {
 }
 
 // TODO
-// func (node *Node) setOwner(owner, group string, mode FileMode) *Node {
-// 	node.Owner, node.Group, node.Mode = owner, group, mode
-// 	return node
-// }
+func (node *Node) setOwner(owner Ownership, mode FileMode) *Node {
+	node.Owner, node.Mode = owner, mode
+	return node
+}
 
 func (node *Node) IsDir() bool {
 	return node.Mode.IsDirectory()
@@ -133,15 +142,16 @@ type DumpNode struct {
 	// Mode is a pointer so a fully-chmod'ed-away 000 survives the round
 	// trip, while snapshots saved before permissions existed (no "mode"
 	// key) restore to the constructor defaults instead of losing theirs.
-	Mode  *FileMode     `json:"mode,omitempty"`
-	Owner user.Identity `json:"owner,omitempty"`
+	Mode  *FileMode `json:"mode,omitempty"`
+	Owner string    `json:"owner,omitempty"`
+	Group string    `json:"group,omitempty"`
 
 	// Mtime is Unix seconds.
 	Mtime int64 `json:"mtime,omitempty"`
 }
 
 func (n *Node) Dump() *DumpNode {
-	d := &DumpNode{Name: n.Name, Content: n.Content, Mode: &n.Mode, Owner: n.Owner}
+	d := &DumpNode{Name: n.Name, Content: n.Content, Mode: &n.Mode, Owner: n.Owner.User, Group: n.Owner.Group}
 	// A zero Time means "unknown"
 	if !n.ModTime.IsZero() {
 		d.Mtime = n.ModTime.Unix()
@@ -153,14 +163,15 @@ func (n *Node) Dump() *DumpNode {
 }
 
 func (d *DumpNode) ToNode() *Node {
+	owner := Ownership{User: d.Owner, Group: d.Group}
 	var n *Node
 	if d.Mode.IsDirectory() {
-		n = NewDir(d.Name, d.Owner)
+		n = NewDir(d.Name, owner)
 	} else {
-		n = NewFile(d.Name, d.Content, d.Owner)
+		n = NewFile(d.Name, d.Content, owner)
 	}
 	n.Mode = *d.Mode
-	n.Owner = d.Owner
+	n.Owner = owner
 	if d.Mtime != 0 {
 		n.ModTime = time.Unix(d.Mtime, 0)
 	}

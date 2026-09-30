@@ -18,17 +18,14 @@ type App struct {
 	session *Session
 }
 
-func NewApp() *App {
-	users := user.InitUsers([]string{})
-	return &App{NewSession(users)}
-}
+func NewApp() *App { return &App{NewSession()} }
 
 func (app *App) Snapshot() ([]byte, error) {
 	return app.session.Snapshot()
 }
 
-func (app *App) Restore(data []byte, asUser string, rootUser *user.Identity) error {
-	session, err := LoadSession(data, asUser, rootUser)
+func (app *App) Restore(data []byte) error {
+	session, err := LoadSession(data)
 	if err != nil {
 		return err
 	}
@@ -42,13 +39,15 @@ type Session struct {
 	shell *shell.Shell
 }
 
-func NewSession(users []*user.Identity) *Session {
-	filesystem := vfs.New(users, users[0], users[0])
-	s := &Session{
-		fs: filesystem, shell: shell.New(filesystem, nil),
-	}
+func NewSession() *Session { return newSession(vfs.New()) }
+
+func newSession(filesystem *vfs.VFS) *Session {
+	s := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
 	s.shell.SwitchUser = s.SwitchUser
-	// s.SetUser(vfs.HomeUser)
+	resident, err := filesystem.UsersDB().Resident()
+	if err != nil || s.SetUser(resident.Name) != nil {
+		s.SetUser(user.RootName)
+	}
 	return s
 }
 
@@ -73,7 +72,9 @@ func (s *Session) Login(name, password string) error {
 	if err := s.SetUser(name); err != nil {
 		return err
 	}
-	s.fs.Chdir(s.fs.Identity().Home)
+	if err := s.fs.Chdir(s.fs.Identity().Home); err != nil {
+		s.fs.Chdir("/")
+	}
 	return nil
 }
 
@@ -93,12 +94,6 @@ func (s *Session) at() string { return clock.In(s.shell.Vars()["TZ"]).Format("15
 
 // Now is that clock, for callers outside a command's result.
 func (app *App) Now() string { return app.session.at() }
-
-func (s *Session) Group() string { return s.fs.Identity().Primary() }
-
-func (app *App) Root() (user.Identity, error) {
-	return app.session.fs.RootUser()
-}
 
 // Result is what one line of input produced.
 type Result struct {

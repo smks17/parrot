@@ -19,7 +19,10 @@ func (c Su) Run(ctx *Context, args []string) int {
 	if len(args) >= 2 {
 		password = args[1]
 	}
-
+	if ctx.SwitchUser == nil {
+		fmt.Fprintf(ctx.Stderr, "%s: only useful inside the shell\n", c.Name())
+		return 1
+	}
 	if err := ctx.SwitchUser(name, password); err != nil {
 		fmt.Fprintf(ctx.Stderr, "%s: %v\n", c.Name(), err)
 		return 1
