@@ -78,7 +78,7 @@ func LoadSession(data []byte, asUser string, rootUser *user.Identity) (*Session,
 
 	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd, rootUser)
 	session := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
-	session.shell.SetUser = session.SetUser
+	session.shell.SwitchUser = session.SwitchUser
 
 	// A saved user who no longer exists — the account was deleted, or
 	// /etc/passwd was removed before saving

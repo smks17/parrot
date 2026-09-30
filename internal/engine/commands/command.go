@@ -34,8 +34,8 @@ type Context struct {
 	Env     map[string]string
 	History []HistoryEntry
 
-	User    user.Identity
-	SetUser func(name string) error
+	User       user.Identity
+	SwitchUser func(name, password string) error
 }
 
 // now is the shell's clock, in the zone TZ names. Without TZ it stays on the

@@ -47,7 +47,7 @@ func NewSession(users []*user.Identity) *Session {
 	s := &Session{
 		fs: filesystem, shell: shell.New(filesystem, nil),
 	}
-	s.shell.SetUser = s.SetUser
+	s.shell.SwitchUser = s.SwitchUser
 	// s.SetUser(vfs.HomeUser)
 	return s
 }
@@ -75,6 +75,15 @@ func (s *Session) Login(name, password string) error {
 	}
 	s.fs.Chdir(s.fs.Identity().Home)
 	return nil
+}
+
+func (s *Session) SwitchUser(name, password string) error {
+	if !s.fs.Identity().IsRoot() {
+		if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+			return err
+		}
+	}
+	return s.SetUser(name)
 }
 
 func (s *Session) User() string { return s.fs.Identity().Name }
