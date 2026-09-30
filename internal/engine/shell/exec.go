@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
-	"parrot/internal/engine/vfs"
 )
 
 // TODO: Configuring
@@ -27,7 +27,7 @@ type Streams struct {
 
 // Shell is one running shell: a filesystem, and the state kept between commands.
 type Shell struct {
-	fs      *vfs.VFS
+	fs      filesystem.FS
 	vars    map[string]string
 	funcs   map[string]*List
 	params  []string // the arguments a script was given, $1 onwards
@@ -42,6 +42,11 @@ type Shell struct {
 
 	user       user.Identity
 	SwitchUser func(name, password string) error
+
+	// Fallback is asked for a command the shell does not have. It is how a
+	// shell on the real filesystem reaches the programs installed on the
+	// machine; the browser leaves it nil and has none.
+	Fallback func(name string) (commands.Command, bool)
 }
 
 type control int
@@ -54,7 +59,7 @@ const (
 	exiting
 )
 
-func New(fs *vfs.VFS, switchUser func(name, password string) error) *Shell {
+func New(fs filesystem.FS, switchUser func(name, password string) error) *Shell {
 	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser}
 }
 
@@ -248,6 +253,11 @@ func (sh *Shell) runCommand(args []string, io Streams) int {
 	if cmd, ok := commands.Lookup(name); ok {
 		return cmd.Run(sh.context(io), rest)
 	}
+	if sh.Fallback != nil {
+		if cmd, ok := sh.Fallback(name); ok {
+			return cmd.Run(sh.context(io), rest)
+		}
+	}
 
 	fmt.Fprintf(io.Err, "prt: %s: command not found\n", name)
 	return 127
@@ -311,29 +321,34 @@ func (sh *Shell) redirect(redirs []Redirect, streams Streams) (Streams, error) {
 }
 
 // TODO: Later use a unified writer reader, especially when devices are implemented
-type fileWriter struct{ node *vfs.Node }
+//
+// fileWriter appends to a file by name rather than holding onto a node: the
+// real filesystem has no node to hold, and everything a redirection does after
+// the file is opened is an append.
+type fileWriter struct {
+	fs   filesystem.FS
+	name string
+}
 
 func (w fileWriter) Write(p []byte) (int, error) {
-	w.node.Append(p)
+	if err := w.fs.Write(w.name, p, true); err != nil {
+		return 0, err
+	}
 	return len(p), nil
 }
 
 func (sh *Shell) openWrite(name string, appending bool) (io.Writer, error) {
-	if _, err := sh.fs.Resolve(name); err != nil {
+	if _, err := sh.fs.Stat(name); err != nil {
 		if err := sh.fs.Create(name); err != nil {
 			return nil, fmt.Errorf("%s: %v", name, err)
 		}
 	}
 	// An empty Write is the permission and directory check, and truncates
-	// the file when not appending. The writer after it can skip the checks.
+	// the file when not appending. The writer after it only ever appends.
 	if err := sh.fs.Write(name, nil, appending); err != nil {
 		return nil, fmt.Errorf("%s: %v", name, err)
 	}
-	node, err := sh.fs.Resolve(name)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %v", name, err)
-	}
-	return fileWriter{node}, nil
+	return fileWriter{fs: sh.fs, name: name}, nil
 }
 
 func (sh *Shell) setStatus(status int) int {
@@ -465,17 +480,17 @@ func (sh *Shell) testOne(op, operand string) (bool, error) {
 		return operand != "", nil
 	}
 
-	node, err := sh.fs.Resolve(operand)
+	entry, err := sh.fs.Stat(operand)
 	exists := err == nil
 	switch op {
 	case "-e":
 		return exists, nil
 	case "-f":
-		return exists && !node.IsDir(), nil
+		return exists && !entry.IsDir(), nil
 	case "-d":
-		return exists && node.IsDir(), nil
+		return exists && entry.IsDir(), nil
 	case "-s":
-		return exists && len(node.Content) > 0, nil
+		return exists && entry.Size > 0, nil
 	}
 	return false, fmt.Errorf("unknown check %q", op)
 }

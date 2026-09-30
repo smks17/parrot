@@ -20,6 +20,11 @@ func (c Su) Run(ctx *Context, args []string) int {
 		password = args[1]
 	}
 
+	// Nothing to switch: the caller is not a shell that has a user to change.
+	if ctx.SwitchUser == nil {
+		fmt.Fprintf(ctx.Stderr, "%s: only useful inside the shell\n", c.Name())
+		return 1
+	}
 	if err := ctx.SwitchUser(name, password); err != nil {
 		fmt.Fprintf(ctx.Stderr, "%s: %v\n", c.Name(), err)
 		return 1

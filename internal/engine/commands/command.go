@@ -6,8 +6,8 @@ import (
 	"io"
 	"maps"
 	"parrot/internal/engine/clock"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
-	"parrot/internal/engine/vfs"
 	"slices"
 	"strings"
 	"time"
@@ -27,7 +27,7 @@ type HistoryEntry struct {
 }
 
 type Context struct {
-	VFS     *vfs.VFS
+	VFS     filesystem.FS
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"parrot/internal/engine/clock"
@@ -10,6 +11,9 @@ import (
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
+
+// TODO: Implement this
+var ErrRealFilesystem = errors.New("this session runs on the real filesystem")
 
 type snapshot struct {
 	Root    *vfs.DumpNode     `json:"root"`
@@ -46,6 +50,11 @@ func (h *historyRecord) UnmarshalJSON(data []byte) error {
 }
 
 func (s *Session) Snapshot() ([]byte, error) {
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return nil, ErrRealFilesystem
+	}
+
 	history := make([]historyRecord, len(s.shell.History))
 	for i, entry := range s.shell.History {
 		history[i] = historyRecord{Line: entry.Line}
@@ -54,8 +63,8 @@ func (s *Session) Snapshot() ([]byte, error) {
 		}
 	}
 	snap := snapshot{
-		Root:    s.fs.RootNode().Dump(),
-		Cwd:     s.fs.Cwd(),
+		Root:    tree.RootNode().Dump(),
+		Cwd:     tree.Cwd(),
 		Env:     s.shell.Vars(),
 		History: history,
 		User:    s.User(),
@@ -76,8 +85,8 @@ func LoadSession(data []byte, asUser string, rootUser *user.Identity) (*Session,
 		clock.SetLocal(snap.Zone, snap.ZoneOffset)
 	}
 
-	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd, rootUser)
-	session := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
+	fsys := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd, rootUser)
+	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
 	session.shell.SwitchUser = session.SwitchUser
 
 	// A saved user who no longer exists — the account was deleted, or

@@ -1,7 +1,10 @@
 package vfs
 
 import (
+	"slices"
+
 	"parrot/internal/engine/clock"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 	"strings"
 	"time"
@@ -13,7 +16,7 @@ type Node struct {
 	Children map[string]*Node // nil for files
 	Parent   *Node            // nil at root; makes ".." a pointer hop
 
-	Mode  FileMode // rwx bits for owner/group/other
+	Mode  filesystem.FileMode // rwx bits for owner/group/other
 	Owner user.Identity
 
 	ModTime time.Time
@@ -26,7 +29,7 @@ func NewFile(name string, content []byte, owner user.Identity) *Node {
 		Children: nil,
 		Parent:   nil,
 
-		Mode:  DefaultFileMode,
+		Mode:  filesystem.DefaultFileMode,
 		Owner: owner,
 
 		ModTime: clock.Now(),
@@ -40,7 +43,7 @@ func NewDir(name string, owner user.Identity) *Node {
 		Children: map[string]*Node{},
 		Parent:   nil,
 
-		Mode:  DefaultDirMode,
+		Mode:  filesystem.DefaultDirMode,
 		Owner: owner,
 
 		ModTime: clock.Now(),
@@ -48,7 +51,7 @@ func NewDir(name string, owner user.Identity) *Node {
 }
 
 // TODO
-// func (node *Node) setOwner(owner, group string, mode FileMode) *Node {
+// func (node *Node) setOwner(owner, group string, mode filesystem.FileMode) *Node {
 // 	node.Owner, node.Group, node.Mode = owner, group, mode
 // 	return node
 // }
@@ -133,8 +136,8 @@ type DumpNode struct {
 	// Mode is a pointer so a fully-chmod'ed-away 000 survives the round
 	// trip, while snapshots saved before permissions existed (no "mode"
 	// key) restore to the constructor defaults instead of losing theirs.
-	Mode  *FileMode     `json:"mode,omitempty"`
-	Owner user.Identity `json:"owner,omitempty"`
+	Mode  *filesystem.FileMode `json:"mode,omitempty"`
+	Owner user.Identity        `json:"owner,omitempty"`
 
 	// Mtime is Unix seconds.
 	Mtime int64 `json:"mtime,omitempty"`
@@ -171,15 +174,44 @@ func (d *DumpNode) ToNode() *Node {
 }
 
 func (n *Node) Walk(do func(node *Node) error) error {
-	err := do(n)
-	if err != nil {
+	if err := do(n); err != nil {
 		return err
 	}
-	for _, child := range n.Children {
-		err = child.Walk(do)
-		if err != nil {
+	names := make([]string, 0, len(n.Children))
+	for name := range n.Children {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	for _, name := range names {
+		if err := n.Children[name].Walk(do); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// info projects a node into the shape every filesystem reports.
+func info(node *Node) filesystem.Info {
+	entry := filesystem.Info{
+		Name:    node.Name,
+		Path:    node.Path(),
+		Mode:    node.Mode,
+		Owner:   node.Owner,
+		Size:    int64(len(node.Content)),
+		Links:   1,
+		ModTime: node.ModTime,
+	}
+	if node.IsDir() {
+		// A directory is linked to by itself, by its parent, and by each
+		// subdirectory's "..".
+		entry.Links = 2
+		entry.Size = 0
+		for _, child := range node.Children {
+			if child.IsDir() {
+				entry.Links++
+			}
+		}
+	}
+	return entry
 }

@@ -1,13 +1,14 @@
 package vfs
 
 import (
-	"errors"
-	"path"
 	"sort"
 	"strings"
 
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
+
+var _ filesystem.FS = (*VFS)(nil)
 
 type VFS struct {
 	root *Node
@@ -35,13 +36,6 @@ func New(users []*user.Identity, rootUser, asUser *user.Identity) *VFS {
 	), *rootUser))
 
 	seedEtc(root, rootUser)
-
-	// root.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
-	// home.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
-	// root.Children["README.md"].setOwner(user.RootName, user.RootGroup, 0644)
-	// root.AddChild(NewDir(user.RootName).
-	// 	setOwner(user.RootName, user.RootGroup, 0700|ModeDirectory))
-	// root.Children["club"].setOwner(user.RootName, user.DevGroup, 0770|ModeDirectory)
 
 	return newVFS(root, home.Children[asUser.Home])
 }
@@ -99,17 +93,17 @@ func (f *VFS) Resolve(path string) (*Node, error) {
 		}
 
 		if !curr.IsDir() {
-			return nil, ErrNotDir
+			return nil, filesystem.ErrNotDir
 		}
 
 		// Looking up a name inside a directory needs execute on it
-		if err := f.checkPerm(curr, permExec); err != nil {
+		if err := f.checkPerm(curr, filesystem.PermExec); err != nil {
 			return nil, err
 		}
 
 		next, ok := curr.Children[seg]
 		if !ok {
-			return nil, ErrNotExist
+			return nil, filesystem.ErrNotExist
 		}
 		curr = next
 	}
@@ -123,10 +117,10 @@ func (f *VFS) Chdir(path string) error {
 		return err
 	}
 	if !dir.IsDir() {
-		return ErrNotDir
+		return filesystem.ErrNotDir
 	}
 	// Entering a directory needs execute on the directory itself
-	if err := f.checkPerm(dir, permExec); err != nil {
+	if err := f.checkPerm(dir, filesystem.PermExec); err != nil {
 		return err
 	}
 	f.cwd = dir
@@ -134,16 +128,9 @@ func (f *VFS) Chdir(path string) error {
 }
 
 func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
-	trimmed := strings.TrimRight(path, "/")
-	if trimmed == "" {
-		return nil, "", ErrExists // the root always exists
-	}
-	parentPath, name := ".", trimmed
-	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
-		parentPath, name = trimmed[:i], trimmed[i+1:]
-		if parentPath == "" {
-			parentPath = "/"
-		}
+	parentPath, name := filesystem.Split(path)
+	if name == "" {
+		return nil, "", filesystem.ErrExists // the root always exists
 	}
 
 	parent, err = f.Resolve(parentPath)
@@ -151,10 +138,10 @@ func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
 		return nil, "", err
 	}
 	if !parent.IsDir() {
-		return nil, "", ErrNotDir
+		return nil, "", filesystem.ErrNotDir
 	}
 	if _, exists := parent.Children[name]; exists {
-		return nil, "", ErrExists
+		return nil, "", filesystem.ErrExists
 	}
 	return parent, name, nil
 }
@@ -165,7 +152,7 @@ func (f *VFS) Mkdir(path string) error {
 		return err
 	}
 	// Creating an entry is a write on the parent directory + the search to reach into it
-	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	parent.AddChild(NewDir(name, f.id))
@@ -178,7 +165,7 @@ func (f *VFS) Create(path string) error {
 		return err
 	}
 	// Creating an entry is a write on the parent directory + the search to reach into it
-	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	parent.AddChild(NewFile(name, nil, f.id))
@@ -190,11 +177,11 @@ func (f *VFS) Write(path string, b []byte, writeAppend bool) error {
 	if err != nil {
 		return err
 	}
-	if err := f.checkPerm(nodeFile, permWrite); err != nil {
+	if err := f.checkPerm(nodeFile, filesystem.PermWrite); err != nil {
 		return err
 	}
 	if nodeFile.IsDir() {
-		return ErrIsDir
+		return filesystem.ErrIsDir
 	}
 	if writeAppend {
 		nodeFile.Append(b)
@@ -210,25 +197,43 @@ func (f *VFS) Read(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := f.checkPerm(nodeFile, permRead); err != nil {
+	if err := f.checkPerm(nodeFile, filesystem.PermRead); err != nil {
 		return nil, err
 	}
 	if nodeFile.IsDir() {
-		return nil, ErrIsDir
+		return nil, filesystem.ErrIsDir
 	}
 	return nodeFile.Content, nil
 }
 
-func (f *VFS) List(path string) ([]*Node, error) {
+// Stat describes one entry without reading it.
+func (f *VFS) Stat(path string) (filesystem.Info, error) {
+	node, err := f.Resolve(path)
+	if err != nil {
+		return filesystem.Info{}, err
+	}
+	return info(node), nil
+}
+
+// Walk visits a path and everything under it.
+func (f *VFS) Walk(path string, do func(filesystem.Info) error) error {
+	node, err := f.Resolve(path)
+	if err != nil {
+		return err
+	}
+	return node.Walk(func(n *Node) error { return do(info(n)) })
+}
+
+func (f *VFS) List(path string) ([]filesystem.Info, error) {
 	nodeFile, err := f.Resolve(path)
 	if err != nil {
 		return nil, err
 	}
 	if !nodeFile.IsDir() {
-		return []*Node{nodeFile}, nil
+		return []filesystem.Info{info(nodeFile)}, nil
 	}
 	// Reading the names inside a directory is the directory's read bit.
-	if err := f.checkPerm(nodeFile, permRead); err != nil {
+	if err := f.checkPerm(nodeFile, filesystem.PermRead); err != nil {
 		return nil, err
 	}
 	var sortedNode []*Node
@@ -238,7 +243,12 @@ func (f *VFS) List(path string) ([]*Node, error) {
 	sort.Slice(sortedNode, func(i, j int) bool {
 		return sortedNode[i].Name < sortedNode[j].Name
 	})
-	return sortedNode, nil
+
+	entries := make([]filesystem.Info, 0, len(sortedNode))
+	for _, node := range sortedNode {
+		entries = append(entries, info(node))
+	}
+	return entries, nil
 }
 
 func (f *VFS) Remove(path string, recursive bool) error {
@@ -250,14 +260,14 @@ func (f *VFS) Remove(path string, recursive bool) error {
 	// The root has no parent to unlink from, and "rm -rf /" should not empty
 	// the world.
 	if node.Parent == nil {
-		return ErrRootRemove
+		return filesystem.ErrRootRemove
 	}
 	// Unlinking is a write on the directory the entry lives in
-	if err := f.checkPerm(node.Parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(node.Parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	if node.IsDir() && len(node.Children) > 0 && !recursive {
-		return ErrNotEmptyDir
+		return filesystem.ErrNotEmptyDir
 	}
 	node.Parent.removeChild(node.Name)
 	return nil
@@ -265,7 +275,7 @@ func (f *VFS) Remove(path string, recursive bool) error {
 
 func (f *VFS) destination(src, dst string) (parent *Node, name string, err error) {
 	if dstNode, err := f.Resolve(dst); err == nil && dstNode.IsDir() {
-		return dstNode, path.Base(strings.TrimRight(src, "/")), nil
+		return dstNode, filesystem.NameFor(src), nil
 	}
 	return f.splitParent(dst)
 }
@@ -275,11 +285,13 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 	if err != nil {
 		return err
 	}
-	if !recursive && srcNode.IsDir() && len(srcNode.Children) > 0 {
-		return ErrNotEmptyDir
+	// Without -r a directory is refused whether or not it is empty, which is
+	// what cp does and what the real filesystem already said.
+	if !recursive && srcNode.IsDir() {
+		return filesystem.ErrIsDir
 	}
 	// Copying reads the source's content.
-	if err := f.checkPerm(srcNode, permRead); err != nil {
+	if err := f.checkPerm(srcNode, filesystem.PermRead); err != nil {
 		return err
 	}
 	parent, name, err := f.destination(src, dst)
@@ -287,7 +299,7 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 		return err
 	}
 	// ...and creating the copy is a write on the destination directory.
-	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	newNode := srcNode.Clone()
@@ -307,17 +319,17 @@ func (f *VFS) Move(src, dst string) error {
 		return err
 	}
 	if srcNode.Path() == "/" {
-		return ErrRootRemove
+		return filesystem.ErrRootRemove
 	}
 	// A rename is a write on the directory the entry leaves + one on the directory it lands in
-	if err := f.checkPerm(srcNode.Parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(srcNode.Parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	parent, name, err := f.destination(src, dst)
 	if err != nil {
 		return err
 	}
-	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(parent, filesystem.PermWrite|filesystem.PermExec); err != nil {
 		return err
 	}
 	srcNode.Parent.removeChild(srcNode.Name)
@@ -326,7 +338,7 @@ func (f *VFS) Move(src, dst string) error {
 	return nil
 }
 
-func (f *VFS) Chmod(path string, mode FileMode) error {
+func (f *VFS) Chmod(path string, mode filesystem.FileMode) error {
 	node, err := f.Resolve(path)
 	if err != nil {
 		return err
@@ -334,12 +346,12 @@ func (f *VFS) Chmod(path string, mode FileMode) error {
 	return f.ChmodNode(node, mode)
 }
 
-func (f *VFS) ChmodNode(n *Node, mode FileMode) error {
+func (f *VFS) ChmodNode(n *Node, mode filesystem.FileMode) error {
 	if err := f.checkOwnership(n); err != nil {
 		return err
 	}
 	// Clear existing permission bits
-	n.Mode &= ^FileMode(0777)
+	n.Mode &= ^filesystem.FileMode(0777)
 	// Set new permission bits
 	n.Mode |= mode & 0777
 	return nil
@@ -354,28 +366,25 @@ func (f *VFS) Chown(path string, owner user.Identity) error {
 }
 
 func (f *VFS) ChownNode(n *Node, owner user.Identity) error {
-	if n == nil {
-		return ErrNotExist
-	}
-
-	if !f.id.IsRoot() {
-		if n.Owner.Name != f.id.Name || !f.id.InGroup(n.Owner.Primary()) {
-			return ErrNotOwner
-		}
+	if err := f.checkOwnership(n); err != nil {
+		return err
 	}
 	n.Owner = owner
 	return nil
 }
 
 func (f *VFS) Touch(path string) error {
-	node, err := f.Resolve(path)
-	if err != nil {
-		if errors.Is(err, ErrNotExist) {
-			return f.Create(path)
-		}
+	created, err := filesystem.CreateMissing(f, path)
+	if err != nil || created {
 		return err
 	}
-	if err := f.checkPerm(node, permWrite); err != nil {
+	// It was already there, so this is only a new timestamp — the tree's own,
+	// which "date -s" can move.
+	node, err := f.Resolve(path)
+	if err != nil {
+		return err
+	}
+	if err := f.checkPerm(node, filesystem.PermWrite); err != nil {
 		return err
 	}
 	node.Touch()

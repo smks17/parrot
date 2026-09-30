@@ -3,13 +3,14 @@ package vfs
 import (
 	"path"
 
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
 
 func seedEtc(root *Node, rootUser *user.Identity) {
 	files := []struct {
 		name, content string
-		mode          FileMode
+		mode          filesystem.FileMode
 	}{
 		{path.Base(user.PasswdPath), user.DefaultPasswd, 0644},
 		{path.Base(user.GroupPath), user.DefaultGroup, 0644},
@@ -36,6 +37,8 @@ func seedEtc(root *Node, rootUser *user.Identity) {
 		if _, exists := etc.Children[f.name]; exists {
 			continue
 		}
-		etc.AddChild(NewFile(f.name, []byte(f.content), *rootUser))
+		seeded := NewFile(f.name, []byte(f.content), *rootUser)
+		seeded.Mode = f.mode
+		etc.AddChild(seeded)
 	}
 }

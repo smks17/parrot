@@ -7,6 +7,7 @@ import (
 
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
@@ -21,6 +22,17 @@ type App struct {
 func NewApp() *App {
 	users := user.InitUsers([]string{})
 	return &App{NewSession(users)}
+}
+
+// NewAppOn starts a shell on a filesystem of your choosing
+func NewAppOn(fsys filesystem.FS) *App {
+	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
+	session.shell.SwitchUser = session.SwitchUser
+	id := fsys.Identity()
+	vars := session.shell.Vars()
+	vars[commands.EnvUser] = id.Name
+	vars[commands.EnvHome] = id.Home
+	return &App{session: session}
 }
 
 func (app *App) Snapshot() ([]byte, error) {
@@ -38,26 +50,35 @@ func (app *App) Restore(data []byte, asUser string, rootUser *user.Identity) err
 
 // Session is one shell and the filesystem it runs on.
 type Session struct {
-	fs    *vfs.VFS
+	fs    filesystem.FS
 	shell *shell.Shell
 }
 
 func NewSession(users []*user.Identity) *Session {
-	filesystem := vfs.New(users, users[0], users[0])
+	fsys := vfs.New(users, users[0], users[0])
 	s := &Session{
-		fs: filesystem, shell: shell.New(filesystem, nil),
+		fs: fsys, shell: shell.New(fsys, nil),
 	}
 	s.shell.SwitchUser = s.SwitchUser
 	// s.SetUser(vfs.HomeUser)
 	return s
 }
 
+func (s *Session) tree() (*vfs.VFS, bool) {
+	tree, inMemory := s.fs.(*vfs.VFS)
+	return tree, inMemory
+}
+
 func (s *Session) SetUser(name string) error {
-	id, err := s.fs.UsersDB().Lookup(name)
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
+	id, err := tree.UsersDB().Lookup(name)
 	if err != nil {
 		return err
 	}
-	s.fs.SetIdentity(id)
+	tree.SetIdentity(id)
 	vars := s.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
@@ -67,7 +88,11 @@ func (s *Session) SetUser(name string) error {
 func (app *App) Login(name, password string) error { return app.session.Login(name, password) }
 
 func (s *Session) Login(name, password string) error {
-	if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
+	if err := tree.UsersDB().Authenticate(name, password); err != nil {
 		return err
 	}
 	if err := s.SetUser(name); err != nil {
@@ -78,8 +103,12 @@ func (s *Session) Login(name, password string) error {
 }
 
 func (s *Session) SwitchUser(name, password string) error {
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
 	if !s.fs.Identity().IsRoot() {
-		if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+		if err := tree.UsersDB().Authenticate(name, password); err != nil {
 			return err
 		}
 	}
@@ -97,7 +126,11 @@ func (app *App) Now() string { return app.session.at() }
 func (s *Session) Group() string { return s.fs.Identity().Primary() }
 
 func (app *App) Root() (user.Identity, error) {
-	return app.session.fs.RootUser()
+	tree, inMemory := app.session.tree()
+	if !inMemory {
+		return user.Identity{}, ErrRealFilesystem
+	}
+	return tree.RootUser()
 }
 
 // Result is what one line of input produced.

@@ -2,7 +2,7 @@ package commands
 
 import (
 	"fmt"
-	"parrot/internal/engine/vfs"
+	"parrot/internal/engine/filesystem"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -64,10 +64,10 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 
 	rows := make([]lsRow, 0, len(nodes)+2)
 	if all {
-		if dir, err := ctx.VFS.Resolve(path); err == nil && dir.IsDir() {
-			rows = append(rows, lsRow{node: dir, name: "."})
-			if dir.Parent != nil {
-				rows = append(rows, lsRow{node: dir.Parent, name: ".."})
+		if dir, err := ctx.VFS.Stat(path); err == nil && dir.IsDir() {
+			rows = append(rows, lsRow{info: dir, name: "."})
+			if parent, err := ctx.VFS.Stat(path + "/.."); err == nil {
+				rows = append(rows, lsRow{info: parent, name: ".."})
 			}
 		}
 	}
@@ -75,7 +75,7 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 		if !all && strings.HasPrefix(node.Name, ".") {
 			continue
 		}
-		rows = append(rows, lsRow{node: node, name: node.Name})
+		rows = append(rows, lsRow{info: node, name: node.Name})
 	}
 
 	width := 0
@@ -89,7 +89,7 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 	now := now(ctx)
 	for _, row := range rows {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.node.Mode, row.links(), row.node.Owner.Name, row.node.Owner.Primary(),
+			row.info.Mode, row.links(), row.info.Owner.Name, row.info.Owner.Primary(),
 			fmt.Sprintf("%*s", width, row.size()), row.modTime(now), row.name)
 	}
 	tw.Flush()
@@ -97,25 +97,14 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 }
 
 type lsRow struct {
-	node *vfs.Node
+	info filesystem.Info
 	name string
 }
 
-func (r lsRow) links() string {
-	if r.node.IsDir() {
-		n := 2
-		for _, child := range r.node.Children {
-			if child.IsDir() {
-				n++
-			}
-		}
-		return strconv.Itoa(n)
-	}
-	return "1"
-}
+func (r lsRow) links() string { return strconv.Itoa(r.info.Links) }
 
 func (r lsRow) modTime(now time.Time) string {
-	t := r.node.ModTime.In(now.Location())
+	t := r.info.ModTime.In(now.Location())
 	if t.After(now.AddDate(0, -6, 0)) && t.Before(now.Add(time.Hour)) {
 		return t.Format("Jan _2 15:04")
 	}
@@ -123,10 +112,10 @@ func (r lsRow) modTime(now time.Time) string {
 }
 
 func (r lsRow) size() string {
-	if r.node.IsDir() {
+	if r.info.IsDir() {
 		return "-"
 	}
-	return strconv.Itoa(len(r.node.Content))
+	return strconv.FormatInt(r.info.Size, 10)
 }
 
 func init() { Register(Ls{}) }

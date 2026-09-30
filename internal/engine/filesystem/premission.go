@@ -1,4 +1,6 @@
-package vfs
+package filesystem
+
+import "parrot/internal/engine/user"
 
 // FileMode holds the nine permission bits as a Unix-style octal value.
 // 0644 == rw-r--r--, 0755 == rwxr-xr-x.
@@ -98,59 +100,47 @@ func (m FileMode) IsDirectory() bool {
 
 // permBits is what a VFS operation needs from a node. Create and Remove
 // need write AND exec on the parent directory — never on the entry.
-type permBits uint8
+type PermBits uint8
 
 const (
-	permRead permBits = 1 << iota
-	permWrite
-	permExec
+	PermRead PermBits = 1 << iota
+	PermWrite
+	PermExec
 )
 
-func (f *VFS) getPermClass(n *Node) PermClass {
-	if n.Owner.Name == f.id.Name {
+func PermClassOf(owner, actor user.Identity) PermClass {
+	if owner.Name == actor.Name {
 		return UserPerm
 	}
-	if f.id.InGroup(n.Owner.Primary()) {
+	if actor.InGroup(owner.Primary()) {
 		return GroupPerm
 	}
 	return OtherUserPerm
 }
 
-// checkPerm is the gate in front of every VFS operation. It compares the
-// VFS's current user against the node's owner, picks the matching bit
-// class, and refuses with ErrPermission when a needed bit is missing.
-func (f *VFS) checkPerm(n *Node, need permBits) error {
-	if n == nil {
-		return ErrNotExist
-	}
-	if f.id.IsRoot() {
+func CheckPerm(mode FileMode, owner, actor user.Identity, need PermBits) error {
+	if actor.IsRoot() {
 		return nil
 	}
 
-	permClass := f.getPermClass(n)
-	if need&permRead != 0 && !n.Mode.CanRead(permClass) {
+	class := PermClassOf(owner, actor)
+	if need&PermRead != 0 && !mode.CanRead(class) {
 		return ErrPermission
 	}
-	if need&permWrite != 0 && !n.Mode.CanWrite(permClass) {
+	if need&PermWrite != 0 && !mode.CanWrite(class) {
 		return ErrPermission
 	}
-	if need&permExec != 0 && !n.Mode.CanExecute(permClass) {
+	if need&PermExec != 0 && !mode.CanExecute(class) {
 		return ErrPermission
 	}
 	return nil
 }
 
-// checkOwnership gates the metadata-changing operations (chmod, chown):
-// only the file's owner may change them. That is Unix EPERM — a different
-// error from the EACCES that checkPerm returns.
-func (f *VFS) checkOwnership(n *Node) error {
-	if n == nil {
-		return ErrNotExist
-	}
-	if f.id.IsRoot() {
+func CheckOwnership(owner, actor user.Identity) error {
+	if actor.IsRoot() {
 		return nil
 	}
-	if n.Owner.Name != f.id.Name {
+	if owner.Name != actor.Name {
 		return ErrNotOwner
 	}
 	return nil
