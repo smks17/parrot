@@ -97,7 +97,12 @@ func main() {
 		}()
 		data := make([]byte, args[0].Get("length").Int())
 		js.CopyBytesToGo(data, args[0])
-		if err := app.Restore(data); err != nil {
+		rootUser, err := app.Root()
+		if err != nil {
+			return false //TODO: handle error
+		}
+		// TODO: As user login
+		if err := app.Restore(data, rootUser.Name, &rootUser); err != nil {
 			return false
 		}
 		return true

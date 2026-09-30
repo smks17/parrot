@@ -65,7 +65,7 @@ func (s *Session) Snapshot() ([]byte, error) {
 	return json.Marshal(snap)
 }
 
-func LoadSession(data []byte) (*Session, error) {
+func LoadSession(data []byte, asUser string, rootUser *user.Identity) (*Session, error) {
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
@@ -76,15 +76,14 @@ func LoadSession(data []byte) (*Session, error) {
 		clock.SetLocal(snap.Zone, snap.ZoneOffset)
 	}
 
-	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd)
+	filesystem := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd, rootUser)
 	session := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
-	session.shell.SetUser = session.SetUser
-	session.users = user.NewDB(filesystem)
+	session.shell.SwitchUser = session.SwitchUser
 
 	// A saved user who no longer exists — the account was deleted, or
 	// /etc/passwd was removed before saving
 	if snap.User == "" || session.SetUser(snap.User) != nil {
-		session.SetUser(vfs.HomeUser)
+		session.SetUser(asUser)
 	}
 
 	if snap.Env != nil {

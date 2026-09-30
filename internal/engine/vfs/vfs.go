@@ -16,41 +16,38 @@ type VFS struct {
 	db   *user.DB
 }
 
-const (
-	HomeUser  = "mahdi"
-	HomeGroup = "users"
-)
-
-func New() *VFS {
-	root := NewDir("")
+func New(users []*user.Identity, rootUser, asUser *user.Identity) *VFS {
+	root := NewDir("", *rootUser)
 
 	for _, dir := range []string{
 		"home", "books", "club", "projects", "memories", "downloads", "secrets",
 	} {
-		root.AddChild(NewDir(dir))
+		root.AddChild(NewDir(dir, *asUser))
 	}
 
 	home := root.Children["home"]
-	home.AddChild(NewDir(HomeUser))
+	for _, user := range users {
+		home.AddChild(NewDir(user.Home, *user))
+	}
 
 	root.AddChild(NewFile("README.md", []byte(
 		"Welcome.\n\nYou are in a terminal that isn't quite real.\nTry: ls, cd, cat\n",
-	)))
+	), *rootUser))
 
-	seedEtc(root)
+	seedEtc(root, rootUser)
 
-	root.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
-	home.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
-	root.Children["README.md"].setOwner(user.RootName, user.RootGroup, 0644)
-	root.AddChild(NewDir(user.RootName).
-		setOwner(user.RootName, user.RootGroup, 0700|ModeDirectory))
-	root.Children["club"].setOwner(user.RootName, user.DevGroup, 0770|ModeDirectory)
+	// root.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
+	// home.setOwner(user.RootName, user.RootGroup, 0755|ModeDirectory)
+	// root.Children["README.md"].setOwner(user.RootName, user.RootGroup, 0644)
+	// root.AddChild(NewDir(user.RootName).
+	// 	setOwner(user.RootName, user.RootGroup, 0700|ModeDirectory))
+	// root.Children["club"].setOwner(user.RootName, user.DevGroup, 0770|ModeDirectory)
 
-	return newVFS(root, home.Children[HomeUser])
+	return newVFS(root, home.Children[asUser.Home])
 }
 
-func FromRoot(root *Node, cwd string) *VFS {
-	seedEtc(root)
+func FromRoot(root *Node, cwd string, rootUser *user.Identity) *VFS {
+	seedEtc(root, rootUser)
 
 	f := newVFS(root, root)
 	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
@@ -60,14 +57,16 @@ func FromRoot(root *Node, cwd string) *VFS {
 }
 
 func newVFS(root, cwd *Node) *VFS {
-	f := &VFS{root: root, cwd: cwd}
-	f.db = user.NewDB(f)
-	return f
+	return &VFS{root: root, cwd: cwd, db: user.NewDB(accounts{root: root})}
 }
+
+func (f *VFS) UsersDB() *user.DB { return f.db }
 
 func (f *VFS) SetIdentity(id user.Identity) { f.id = id }
 
 func (f *VFS) Identity() user.Identity { return f.id }
+
+func (f *VFS) RootUser() (user.Identity, error) { return f.db.Root() } //TODO: Delete later
 
 func (f *VFS) User() string { return f.id.Name }
 
@@ -169,7 +168,7 @@ func (f *VFS) Mkdir(path string) error {
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	parent.AddChild(NewDir(name))
+	parent.AddChild(NewDir(name, f.id))
 	return nil
 }
 
@@ -182,7 +181,7 @@ func (f *VFS) Create(path string) error {
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	parent.AddChild(NewFile(name, nil))
+	parent.AddChild(NewFile(name, nil, f.id))
 	return nil
 }
 
@@ -346,41 +345,25 @@ func (f *VFS) ChmodNode(n *Node, mode FileMode) error {
 	return nil
 }
 
-func (f *VFS) Chown(path, owner, group string) error {
+func (f *VFS) Chown(path string, owner user.Identity) error {
 	node, err := f.Resolve(path)
 	if err != nil {
 		return err
 	}
-	return f.ChownNode(node, owner, group)
+	return f.ChownNode(node, owner)
 }
 
-func (f *VFS) ChownNode(n *Node, owner, group string) error {
+func (f *VFS) ChownNode(n *Node, owner user.Identity) error {
 	if n == nil {
 		return ErrNotExist
 	}
 
-	if owner != "" && !f.db.UserExists(owner) {
-		return user.ErrNoUser(owner)
-	}
-	if group != "" && !f.db.GroupExists(group) {
-		return user.ErrNoGroup(group)
-	}
-
 	if !f.id.IsRoot() {
-		if owner != "" {
-			return ErrNotOwner
-		}
-		if group != "" && (n.Owner != f.id.Name || !f.id.InGroup(group)) {
+		if n.Owner.Name != f.id.Name || !f.id.InGroup(n.Owner.Primary()) {
 			return ErrNotOwner
 		}
 	}
-
-	if owner != "" {
-		n.Owner = owner
-	}
-	if group != "" {
-		n.Group = group
-	}
+	n.Owner = owner
 	return nil
 }
 

@@ -107,10 +107,10 @@ const (
 )
 
 func (f *VFS) getPermClass(n *Node) PermClass {
-	if n.Owner == f.id.Name {
+	if n.Owner.Name == f.id.Name {
 		return UserPerm
 	}
-	if f.id.InGroup(n.Group) {
+	if f.id.InGroup(n.Owner.Primary()) {
 		return GroupPerm
 	}
 	return OtherUserPerm
@@ -150,7 +150,7 @@ func (f *VFS) checkOwnership(n *Node) error {
 	if f.id.IsRoot() {
 		return nil
 	}
-	if n.Owner != "" && n.Owner != f.id.Name {
+	if n.Owner.Name != f.id.Name {
 		return ErrNotOwner
 	}
 	return nil

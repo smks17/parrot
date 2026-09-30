@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"parrot/internal/engine"
 )
@@ -12,6 +13,30 @@ func report(result engine.Result) int {
 	fmt.Fprint(os.Stdout, result.Stdout)
 	fmt.Fprint(os.Stderr, result.Stderr)
 	return result.ExitCode
+}
+
+func login(app *engine.App, scanner *bufio.Scanner) bool {
+	for {
+		fmt.Printf("%s login: ", engine.ShellName)
+		if !scanner.Scan() {
+			fmt.Println()
+			return false
+		}
+		name := strings.TrimSpace(scanner.Text())
+		if name == "" {
+			continue
+		}
+		fmt.Print("Password: ")
+		if !scanner.Scan() {
+			fmt.Println()
+			return false
+		}
+		if err := app.Login(name, scanner.Text()); err != nil {
+			fmt.Fprintln(os.Stderr, "Login incorrect")
+			continue
+		}
+		return true
+	}
 }
 
 func main() {
@@ -27,6 +52,10 @@ func main() {
 		os.Exit(report(app.RunScript(string(src), os.Args[2:])))
 	}
 	scanner := bufio.NewScanner(os.Stdin)
+
+	if !login(app, scanner) {
+		os.Exit(1)
+	}
 
 	for {
 		// root gets "#", like a real shell — su has to be visible somewhere.

@@ -19,15 +19,16 @@ type App struct {
 }
 
 func NewApp() *App {
-	return &App{NewSession()}
+	users := user.InitUsers([]string{})
+	return &App{NewSession(users)}
 }
 
 func (app *App) Snapshot() ([]byte, error) {
 	return app.session.Snapshot()
 }
 
-func (app *App) Restore(data []byte) error {
-	session, err := LoadSession(data)
+func (app *App) Restore(data []byte, asUser string, rootUser *user.Identity) error {
+	session, err := LoadSession(data, asUser, rootUser)
 	if err != nil {
 		return err
 	}
@@ -39,27 +40,50 @@ func (app *App) Restore(data []byte) error {
 type Session struct {
 	fs    *vfs.VFS
 	shell *shell.Shell
-	users *user.DB
 }
 
-func NewSession() *Session {
-	filesystem := vfs.New()
+func NewSession(users []*user.Identity) *Session {
+	filesystem := vfs.New(users, users[0], users[0])
 	s := &Session{
 		fs: filesystem, shell: shell.New(filesystem, nil),
 	}
-	s.shell.SetUser = s.SetUser
-	s.users = user.NewDB(filesystem)
-	s.SetUser(vfs.HomeUser)
+	s.shell.SwitchUser = s.SwitchUser
+	// s.SetUser(vfs.HomeUser)
 	return s
 }
 
 func (s *Session) SetUser(name string) error {
-	id, err := s.users.Lookup(name)
+	id, err := s.fs.UsersDB().Lookup(name)
 	if err != nil {
 		return err
 	}
 	s.fs.SetIdentity(id)
+	vars := s.shell.Vars()
+	vars[commands.EnvUser] = id.Name
+	vars[commands.EnvHome] = id.Home
 	return nil
+}
+
+func (app *App) Login(name, password string) error { return app.session.Login(name, password) }
+
+func (s *Session) Login(name, password string) error {
+	if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+		return err
+	}
+	if err := s.SetUser(name); err != nil {
+		return err
+	}
+	s.fs.Chdir(s.fs.Identity().Home)
+	return nil
+}
+
+func (s *Session) SwitchUser(name, password string) error {
+	if !s.fs.Identity().IsRoot() {
+		if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+			return err
+		}
+	}
+	return s.SetUser(name)
 }
 
 func (s *Session) User() string { return s.fs.Identity().Name }
@@ -71,6 +95,10 @@ func (s *Session) at() string { return clock.In(s.shell.Vars()["TZ"]).Format("15
 func (app *App) Now() string { return app.session.at() }
 
 func (s *Session) Group() string { return s.fs.Identity().Primary() }
+
+func (app *App) Root() (user.Identity, error) {
+	return app.session.fs.RootUser()
+}
 
 // Result is what one line of input produced.
 type Result struct {

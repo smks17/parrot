@@ -40,8 +40,8 @@ type Shell struct {
 	control control
 	code    int
 
-	user    user.Identity
-	SetUser func(name string) error
+	user       user.Identity
+	SwitchUser func(name, password string) error
 }
 
 type control int
@@ -54,8 +54,8 @@ const (
 	exiting
 )
 
-func New(fs *vfs.VFS, setUser func(name string) error) *Shell {
-	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SetUser: setUser}
+func New(fs *vfs.VFS, switchUser func(name, password string) error) *Shell {
+	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser}
 }
 
 func (sh *Shell) Vars() map[string]string { return sh.vars }
@@ -256,14 +256,14 @@ func (sh *Shell) runCommand(args []string, io Streams) int {
 // context is what the commands package expects to be handed.
 func (sh *Shell) context(io Streams) *commands.Context {
 	return &commands.Context{
-		VFS:     sh.fs,
-		Stdin:   io.In,
-		Stdout:  io.Out,
-		Stderr:  io.Err,
-		Env:     sh.vars,
-		History: sh.History,
-		User:    sh.fs.Identity(),
-		SetUser: sh.SetUser,
+		VFS:        sh.fs,
+		Stdin:      io.In,
+		Stdout:     io.Out,
+		Stderr:     io.Err,
+		Env:        sh.vars,
+		History:    sh.History,
+		User:       sh.fs.Identity(),
+		SwitchUser: sh.SwitchUser,
 	}
 }
 
