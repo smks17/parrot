@@ -48,7 +48,7 @@ func (sh *Shell) glob(pattern string) []string {
 
 	var matches []string
 	for _, entry := range entries {
-		// A name starting with a dot is only matched by a pattern that
+		// A name starting with a currDir is only matched by a pattern that
 		// starts with one too.
 		if strings.HasPrefix(entry.Name, ".") && !strings.HasPrefix(base, ".") {
 			continue
