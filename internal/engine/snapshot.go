@@ -7,8 +7,6 @@ import (
 
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
-	"parrot/internal/engine/shell"
-	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
 
@@ -63,7 +61,7 @@ func (s *Session) Snapshot() ([]byte, error) {
 		}
 	}
 	snap := snapshot{
-		Root:    tree.RootNode().Dump(),
+		Root:    tree.RootInode().Dump(""),
 		Cwd:     tree.Cwd(),
 		Env:     s.shell.Vars(),
 		History: history,
@@ -74,7 +72,7 @@ func (s *Session) Snapshot() ([]byte, error) {
 	return json.Marshal(snap)
 }
 
-func LoadSession(data []byte, asUser string, rootUser *user.Identity) (*Session, error) {
+func LoadSession(data []byte) (*Session, error) {
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
@@ -85,18 +83,15 @@ func LoadSession(data []byte, asUser string, rootUser *user.Identity) (*Session,
 		clock.SetLocal(snap.Zone, snap.ZoneOffset)
 	}
 
-	fsys := vfs.FromRoot(snap.Root.ToNode(), snap.Cwd, rootUser)
-	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
-	session.shell.SwitchUser = session.SwitchUser
+	session := newSession(vfs.FromRoot(snap.Root.ToInode(), snap.Cwd))
 
-	// A saved user who no longer exists — the account was deleted, or
-	// /etc/passwd was removed before saving
-	if snap.User == "" || session.SetUser(snap.User) != nil {
-		session.SetUser(asUser)
+	if snap.User != "" {
+		session.SetUser(snap.User)
 	}
 
 	if snap.Env != nil {
 		session.shell.SetVars(snap.Env)
+		session.SetUser(session.User())
 	}
 	history := make([]commands.HistoryEntry, len(snap.History))
 	for i, record := range snap.History {

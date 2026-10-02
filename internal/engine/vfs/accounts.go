@@ -15,7 +15,7 @@ import (
 // unexported and never handed out, which leaves this file as the only way
 // into the tree that skips the checks, and /etc/shadow root-only to every
 // other one.
-type accounts struct{ root *Node }
+type accounts struct{ root *Inode }
 
 var _ user.Reader = accounts{}
 
@@ -28,7 +28,7 @@ func (a accounts) ReadRaw(p string) ([]byte, error) {
 		if !curr.IsDir() {
 			return nil, filesystem.ErrNotDir
 		}
-		next, ok := curr.Children[seg]
+		next, ok := curr.Lookup(seg)
 		if !ok {
 			return nil, filesystem.ErrNotExist
 		}
@@ -37,5 +37,5 @@ func (a accounts) ReadRaw(p string) ([]byte, error) {
 	if curr.IsDir() {
 		return nil, filesystem.ErrIsDir
 	}
-	return curr.Content, nil
+	return curr.Bytes(), nil
 }

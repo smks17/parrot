@@ -108,17 +108,23 @@ const (
 	PermExec
 )
 
-func PermClassOf(owner, actor user.Identity) PermClass {
-	if owner.Name == actor.Name {
+// Ownership is who a file belongs to: the two names it records.
+type Ownership struct {
+	User  string
+	Group string
+}
+
+func PermClassOf(owner Ownership, actor user.Identity) PermClass {
+	if owner.User == actor.Name {
 		return UserPerm
 	}
-	if actor.InGroup(owner.Primary()) {
+	if actor.InGroup(owner.Group) {
 		return GroupPerm
 	}
 	return OtherUserPerm
 }
 
-func CheckPerm(mode FileMode, owner, actor user.Identity, need PermBits) error {
+func CheckPerm(mode FileMode, owner Ownership, actor user.Identity, need PermBits) error {
 	if actor.IsRoot() {
 		return nil
 	}
@@ -136,11 +142,11 @@ func CheckPerm(mode FileMode, owner, actor user.Identity, need PermBits) error {
 	return nil
 }
 
-func CheckOwnership(owner, actor user.Identity) error {
+func CheckOwnership(owner Ownership, actor user.Identity) error {
 	if actor.IsRoot() {
 		return nil
 	}
-	if owner.Name != actor.Name {
+	if owner.User != actor.Name {
 		return ErrNotOwner
 	}
 	return nil

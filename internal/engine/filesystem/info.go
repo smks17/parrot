@@ -11,6 +11,7 @@ import (
 type Info struct {
 	Name    string
 	Path    string
+	Ino     uint64 // what "ls -i" prints; 0 where there is no such number
 	Mode    FileMode
 	Owner   user.Identity
 	Size    int64

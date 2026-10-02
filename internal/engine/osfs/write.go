@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"parrot/internal/engine/filesystem"
-	"parrot/internal/engine/user"
 )
 
 func (f *FS) Write(path string, content []byte, appending bool) error {
@@ -117,8 +116,8 @@ func (f *FS) Chmod(path string, mode filesystem.FileMode) error {
 	return translate(os.Chmod(f.resolve(path), os.FileMode(mode&0o777)))
 }
 
-func (f *FS) Chown(path string, owner user.Identity) error {
-	uid, gid, err := ids(owner.Name, owner.Primary())
+func (f *FS) Chown(path string, owner, group string) error {
+	uid, gid, err := ids(owner, group)
 	if err != nil {
 		return err
 	}

@@ -1,12 +1,14 @@
 package shell
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"io"
 	"log"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
@@ -18,12 +20,6 @@ const (
 	maxLoops = 100000
 	maxCalls = 100
 )
-
-type Streams struct {
-	In  io.Reader
-	Out io.Writer
-	Err io.Writer
-}
 
 // Shell is one running shell: a filesystem, and the state kept between commands.
 type Shell struct {
@@ -39,6 +35,9 @@ type Shell struct {
 	// or shell they were meant for clears it again.
 	control control
 	code    int
+
+	ctx  context.Context
+	tick func() // The shell alls it where a loop could otherwise run forever without parking
 
 	user       user.Identity
 	SwitchUser func(name, password string) error
@@ -57,10 +56,11 @@ const (
 	continuing
 	returning
 	exiting
+	interrupting
 )
 
 func New(fs filesystem.FS, switchUser func(name, password string) error) *Shell {
-	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser}
+	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser, ctx: context.Background()}
 }
 
 func (sh *Shell) Vars() map[string]string { return sh.vars }
@@ -68,6 +68,35 @@ func (sh *Shell) Vars() map[string]string { return sh.vars }
 func (sh *Shell) SetVars(vars map[string]string) { sh.vars = vars }
 
 func (sh *Shell) SetParams(params []string) { sh.params = params }
+
+func (sh *Shell) SetContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sh.ctx = ctx
+}
+
+func (sh *Shell) Interrupted() bool {
+	if sh.control != interrupting {
+		return false
+	}
+	sh.control = running
+	return true
+}
+
+func (sh *Shell) SetYield(tick func()) { sh.tick = tick }
+
+func (sh *Shell) interrupted() bool {
+	if sh.tick != nil {
+		sh.tick()
+	}
+	if sh.ctx.Err() == nil {
+		return false
+	}
+	sh.control = interrupting
+	sh.setStatus(130) // 128 + SIGINT, the way a real shell reports it
+	return true
+}
 
 func (sh *Shell) Exiting() (int, bool) {
 	if sh.control != exiting {
@@ -78,23 +107,26 @@ func (sh *Shell) Exiting() (int, bool) {
 }
 
 // Run parses and runs source text, returning the status of the last command.
-func (sh *Shell) Run(src string, io Streams) int {
+func (sh *Shell) Run(src string, fds *filesystem.FDTable) int {
 	list, err := Parse(src)
 	if err != nil {
-		return sh.fail(io, err)
+		return sh.fail(fds, err)
 	}
 
-	status := sh.runList(list, io)
-	if sh.control != exiting {
+	status := sh.runList(list, fds)
+	if sh.control != exiting && sh.control != interrupting {
 		sh.control = running
 	}
 	return status
 }
 
-func (sh *Shell) runList(list *List, io Streams) int {
+func (sh *Shell) runList(list *List, fds *filesystem.FDTable) int {
 	status := 0
 	for _, cmd := range list.Cmds {
-		status = sh.runCmd(cmd, io)
+		if sh.interrupted() {
+			return sh.status
+		}
+		status = sh.runCmd(cmd, fds)
 		if sh.control != running {
 			break
 		}
@@ -102,80 +134,86 @@ func (sh *Shell) runList(list *List, io Streams) int {
 	return status
 }
 
-func (sh *Shell) runCmd(cmd Cmd, io Streams) int {
+func (sh *Shell) runCmd(cmd Cmd, fds *filesystem.FDTable) int {
 	switch c := cmd.(type) {
 	case *List:
-		return sh.runList(c, io)
+		return sh.runList(c, fds)
 	case *AndOr:
-		return sh.runAndOr(c, io)
+		return sh.runAndOr(c, fds)
 	case *Pipeline:
-		return sh.runPipeline(c, io)
+		return sh.runPipeline(c, fds)
 	case *If:
-		return sh.runIf(c, io)
+		return sh.runIf(c, fds)
 	case *Loop:
-		return sh.runLoop(c, io)
+		return sh.runLoop(c, fds)
 	case *For:
-		return sh.runFor(c, io)
+		return sh.runFor(c, fds)
 	// TODO: Implement
 	// case *FuncDef:
 	// 	sh.funcs[c.Name] = c.Body
 	// 	return sh.setStatus(0)
 	case *Simple:
-		return sh.runSimple(c, io)
+		return sh.runSimple(c, fds)
 	}
-	return sh.fail(io, fmt.Errorf("cannot run %T", cmd))
+	return sh.fail(fds, fmt.Errorf("cannot run %T", cmd))
 }
 
-func (sh *Shell) runAndOr(cmd *AndOr, io Streams) int {
-	status := sh.runCmd(cmd.Left, io)
+func (sh *Shell) runAndOr(cmd *AndOr, fds *filesystem.FDTable) int {
+	status := sh.runCmd(cmd.Left, fds)
 	if sh.control != running {
 		return status
 	}
 	// && runs the right side after a success, || after a failure.
 	if (cmd.Op == "&&") == (status == 0) {
-		return sh.runCmd(cmd.Right, io)
+		return sh.runCmd(cmd.Right, fds)
 	}
 	return status
 }
 
-func (sh *Shell) runIf(cmd *If, io Streams) int {
-	if sh.runList(cmd.Cond, io) == 0 {
-		return sh.runList(cmd.Then, io)
+func (sh *Shell) runIf(cmd *If, fds *filesystem.FDTable) int {
+	if sh.runList(cmd.Cond, fds) == 0 {
+		return sh.runList(cmd.Then, fds)
 	}
 	if cmd.Else != nil {
-		return sh.runList(cmd.Else, io)
+		return sh.runList(cmd.Else, fds)
 	}
 	return sh.setStatus(0)
 }
 
-func (sh *Shell) runLoop(loop *Loop, io Streams) int {
+func (sh *Shell) runLoop(loop *Loop, fds *filesystem.FDTable) int {
 	status := 0
 	for turn := 0; turn < maxLoops; turn++ {
-		succeeded := sh.runList(loop.Cond, io) == 0
+		if sh.interrupted() {
+			return sh.status
+		}
+		succeeded := sh.runList(loop.Cond, fds) == 0
 		if sh.control != running {
 			return status
 		}
 		if succeeded == loop.Until {
 			return status
 		}
-		status = sh.runList(loop.Body, io)
+		status = sh.runList(loop.Body, fds)
 		if sh.stopLoop() {
 			return status
 		}
 	}
-	return sh.fail(io, fmt.Errorf("loop ran too long")) // TODO: create error object
+	return sh.fail(fds, fmt.Errorf("loop ran too long")) // TODO: create error object
 }
 
-func (sh *Shell) runFor(cmd *For, io Streams) int {
-	items, err := sh.expandWords(cmd.Items, io)
+func (sh *Shell) runFor(cmd *For, fds *filesystem.FDTable) int {
+	items, err := sh.expandWords(cmd.Items, fds)
 	if err != nil {
-		return sh.fail(io, err)
+		return sh.fail(fds, err)
 	}
 
 	status := 0
 	for _, item := range items {
+		if sh.interrupted() {
+			return sh.status
+		}
 		sh.vars[cmd.Name] = item
-		status = sh.runList(cmd.Body, io)
+		status = sh.runList(cmd.Body, fds)
 		if sh.stopLoop() {
 			break
 		}
@@ -197,16 +235,16 @@ func (sh *Shell) stopLoop() bool {
 	return true
 }
 
-func (sh *Shell) runSimple(cmd *Simple, io Streams) int {
-	args, err := sh.expandWords(cmd.Words, io)
+func (sh *Shell) runSimple(cmd *Simple, fds *filesystem.FDTable) int {
+	args, err := sh.expandWords(cmd.Words, fds)
 	if err != nil {
-		return sh.fail(io, err)
+		return sh.fail(fds, err)
 	}
 
 	for _, assign := range cmd.Assigns {
-		value, err := sh.expandOne(assign.Value, io)
+		value, err := sh.expandOne(assign.Value, fds)
 		if err != nil {
-			return sh.fail(io, err)
+			return sh.fail(fds, err)
 		}
 		sh.vars[assign.Name] = value
 	}
@@ -214,62 +252,104 @@ func (sh *Shell) runSimple(cmd *Simple, io Streams) int {
 		return sh.setStatus(0) // the command was only assignments
 	}
 
-	streams, err := sh.redirect(cmd.Redirs, io)
+	redirected, err := sh.redirect(cmd.Redirs, fds)
 	if err != nil {
-		return sh.fail(io, err)
+		return sh.fail(redirected, err)
 	}
-	return sh.setStatus(sh.runCommand(args, streams))
+	return sh.setStatus(sh.runCommand(args, redirected))
 }
 
-func (sh *Shell) runPipeline(pipeline *Pipeline, io Streams) int {
-	status := 0
-	in := io.In
+// runPipeline runs the stages at the same time, each reading what the one
+// before it writes through an io.Pipe. A pipe holds no buffer, so a fast
+// producer waits for its reader instead of growing memory, and "cat file |
+// wc" starts counting before cat is done.
+func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
+	if len(pipeline.Cmds) == 1 {
+		return sh.runCmd(pipeline.Cmds[0], fds)
+	}
+
+	last := len(pipeline.Cmds) - 1
+	var stages sync.WaitGroup
+	statuses := make([]int, len(pipeline.Cmds))
+
+	// read is the previous stage
+	var read *filesystem.File
 
 	for i, cmd := range pipeline.Cmds {
-		var collected bytes.Buffer
-		out := io.Out
-		if i < len(pipeline.Cmds)-1 {
-			out = &collected // not the last: its output feeds the next one
+		stage := fds.Clone()
+
+		var localFdTable filesystem.FDTable
+		if read != nil {
+			stage.Set(filesystem.Stdin, read)
+			localFdTable.Alloc(read)
+		}
+		if i < last {
+			var write *filesystem.File
+			read, write = filesystem.Pipe()
+			stage.Set(filesystem.Stdout, write)
+			localFdTable.Alloc(write)
 		}
 
-		status = sh.runCmd(cmd, Streams{In: in, Out: out, Err: io.Err})
-		if sh.control != running {
-			break
-		}
-		in = bytes.NewReader(collected.Bytes())
+		child := sh.sub()
+		stages.Add(1)
+		go func() {
+			defer stages.Done()
+			statuses[i] = child.runCmd(cmd, stage)
+			localFdTable.Destroy()
+			if child.interrupted() {
+				statuses[i] = child.status
+			}
+		}()
 	}
-	return status
+	stages.Wait()
+
+	if sh.ctx.Err() != nil {
+		sh.control = interrupting
+		return sh.setStatus(130) // 128 + SIGINT, the way a real shell reports it
+	}
+	return sh.setStatus(statuses[len(statuses)-1])
 }
 
-func (sh *Shell) runCommand(args []string, io Streams) int {
+func (sh *Shell) sub() *Shell {
+	child := *sh
+	child.vars = maps.Clone(sh.vars)
+	child.funcs = maps.Clone(sh.funcs)
+	child.params = slices.Clone(sh.params)
+	child.control = running
+	return &child
+}
+
+func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
 	name, rest := args[0], args[1:]
 
 	if body, ok := sh.funcs[name]; ok {
-		return sh.callFunc(body, rest, io)
+		return sh.callFunc(body, rest, fds)
 	}
-	if status, ok := sh.builtin(name, rest, io); ok {
+	if status, ok := sh.builtin(name, rest, fds); ok {
 		return status
 	}
 	if cmd, ok := commands.Lookup(name); ok {
-		return cmd.Run(sh.context(io), rest)
+		return cmd.Run(sh.context(fds), rest)
 	}
 	if sh.Fallback != nil {
 		if cmd, ok := sh.Fallback(name); ok {
-			return cmd.Run(sh.context(io), rest)
+			return cmd.Run(sh.context(fds), rest)
 		}
 	}
 
-	fmt.Fprintf(io.Err, "prt: %s: command not found\n", name)
+	fmt.Fprintf(fds.Stderr(), "prt: %s: command not found\n", name)
 	return 127
 }
 
 // context is what the commands package expects to be handed.
-func (sh *Shell) context(io Streams) *commands.Context {
+func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
 	return &commands.Context{
+		Ctx:        sh.ctx,
 		VFS:        sh.fs,
-		Stdin:      io.In,
-		Stdout:     io.Out,
-		Stderr:     io.Err,
+		Fds:        fds,
+		Stdin:      GuardReader(sh.ctx, sh.tick, fds.Stdin()),
+		Stdout:     GuardWriter(sh.ctx, sh.tick, fds.Stdout()),
+		Stderr:     GuardWriter(sh.ctx, sh.tick, fds.Stderr()),
 		Env:        sh.vars,
 		History:    sh.History,
 		User:       sh.fs.Identity(),
@@ -277,78 +357,62 @@ func (sh *Shell) context(io Streams) *commands.Context {
 	}
 }
 
-func (sh *Shell) callFunc(body *List, args []string, io Streams) int {
+func (sh *Shell) callFunc(body *List, args []string, fds *filesystem.FDTable) int {
 	log.Fatal("Not implemented") // TODO
 	return 0
 }
 
-func (sh *Shell) redirect(redirs []Redirect, streams Streams) (Streams, error) {
+func (sh *Shell) redirect(redirs []Redirect, fds *filesystem.FDTable) (*filesystem.FDTable, error) {
+	if len(redirs) == 0 {
+		return fds, nil
+	}
+	fds = fds.Clone()
+
 	for _, redirect := range redirs {
 		if redirect.Op == "2>&1" {
-			streams.Err = streams.Out // send errors wherever output goes
+			err := fds.Dup(filesystem.Stdout, filesystem.Stderr)
+			if err != nil {
+				return fds, err
+			}
 			continue
 		}
 		if redirect.Op == ">&2" {
-			streams.Out = streams.Err
+			err := fds.Dup(filesystem.Stderr, filesystem.Stdout)
+			if err != nil {
+				return fds, err
+			}
 			continue
 		}
 
-		name, err := sh.expandOne(redirect.Target, streams)
+		name, err := sh.expandOne(redirect.Target, fds)
 		if err != nil {
-			return streams, err
+			return fds, err
 		}
 
 		if redirect.Op == "<" {
-			content, err := sh.fs.Read(name)
+			file, err := sh.fs.Open(name, filesystem.O_RDONLY)
 			if err != nil {
-				return streams, fmt.Errorf("%s: %v", name, err)
+				return fds, fmt.Errorf("%s: %v", name, err)
 			}
-			streams.In = bytes.NewReader(content)
+			fds.Set(filesystem.Stdin, file)
 			continue
 		}
 
-		file, err := sh.openWrite(name, strings.HasSuffix(redirect.Op, ">>"))
+		flags := filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_TRUNC
+		if strings.HasSuffix(redirect.Op, ">>") {
+			flags = filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_APPEND
+		}
+		file, err := sh.fs.Open(name, flags)
 		if err != nil {
-			return streams, err
+			return fds, fmt.Errorf("%s: %v", name, err)
 		}
+		fd := filesystem.Stdout
 		if strings.HasPrefix(redirect.Op, "2") {
-			streams.Err = file
-			continue
+			fd = filesystem.Stderr
 		}
-		streams.Out = file
+		fds.Set(fd, file)
 	}
-	return streams, nil
-}
-
-// TODO: Later use a unified writer reader, especially when devices are implemented
-//
-// fileWriter appends to a file by name rather than holding onto a node: the
-// real filesystem has no node to hold, and everything a redirection does after
-// the file is opened is an append.
-type fileWriter struct {
-	fs   filesystem.FS
-	name string
-}
-
-func (w fileWriter) Write(p []byte) (int, error) {
-	if err := w.fs.Write(w.name, p, true); err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-
-func (sh *Shell) openWrite(name string, appending bool) (io.Writer, error) {
-	if _, err := sh.fs.Stat(name); err != nil {
-		if err := sh.fs.Create(name); err != nil {
-			return nil, fmt.Errorf("%s: %v", name, err)
-		}
-	}
-	// An empty Write is the permission and directory check, and truncates
-	// the file when not appending. The writer after it only ever appends.
-	if err := sh.fs.Write(name, nil, appending); err != nil {
-		return nil, fmt.Errorf("%s: %v", name, err)
-	}
-	return fileWriter{fs: sh.fs, name: name}, nil
+	return fds, nil
 }
 
 func (sh *Shell) setStatus(status int) int {
@@ -356,7 +420,7 @@ func (sh *Shell) setStatus(status int) int {
 	return status
 }
 
-func (sh *Shell) builtin(name string, args []string, io Streams) (int, bool) {
+func (sh *Shell) builtin(name string, args []string, fds *filesystem.FDTable) (int, bool) {
 	switch name {
 	case ":":
 		return 0, true
@@ -392,9 +456,9 @@ func (sh *Shell) builtin(name string, args []string, io Streams) (int, bool) {
 		}
 		return 0, true
 	case "source", ".":
-		return sh.source(args, io), true
+		return sh.source(args, fds), true
 	case "test", "[":
-		return sh.test(args, io), true
+		return sh.test(args, fds), true
 	}
 	return 0, false
 }
@@ -410,19 +474,19 @@ func exitStatus(args []string, fallback int) int {
 	return status
 }
 
-func (sh *Shell) source(args []string, io Streams) int {
+func (sh *Shell) source(args []string, fds *filesystem.FDTable) int {
 	if len(args) == 0 {
-		fmt.Fprintln(io.Err, "prt: source: no file given")
+		fmt.Fprintln(fds.Stderr(), "prt: source: no file given")
 		return 2
 	}
 
 	content, err := sh.fs.Read(args[0])
 	if err != nil {
-		fmt.Fprintf(io.Err, "prt: source: %s: %v\n", args[0], err)
+		fmt.Fprintf(fds.Stderr(), "prt: source: %s: %v\n", args[0], err)
 		return 1
 	}
 	if sh.calls >= maxCalls {
-		fmt.Fprintf(io.Err, "prt: source: %s: nested too deeply\n", args[0])
+		fmt.Fprintf(fds.Stderr(), "prt: source: %s: nested too deeply\n", args[0])
 		return 1
 	}
 
@@ -431,7 +495,7 @@ func (sh *Shell) source(args []string, io Streams) int {
 		sh.params = args[1:]
 	}
 	sh.calls++
-	status := sh.Run(string(content), io)
+	status := sh.Run(string(content), fds)
 	sh.calls--
 	sh.params = saved
 	return status
@@ -439,14 +503,14 @@ func (sh *Shell) source(args []string, io Streams) int {
 
 // test is the "test" builtin, which is also written "[ ... ]". It is what
 // gives "if" and "while" something to ask about.
-func (sh *Shell) test(args []string, io Streams) int {
+func (sh *Shell) test(args []string, fds *filesystem.FDTable) int {
 	if len(args) > 0 && args[len(args)-1] == "]" {
 		args = args[:len(args)-1] // the closing bracket is not an argument
 	}
 
 	result, err := sh.testExpr(args)
 	if err != nil {
-		fmt.Fprintf(io.Err, "prt: test: %v\n", err)
+		fmt.Fprintf(fds.Stderr(), "prt: test: %v\n", err)
 		return 2
 	}
 	if !result {
@@ -529,7 +593,7 @@ func (sh *Shell) testTwo(left, op, right string) (bool, error) {
 	return false, fmt.Errorf("unknown comparison %q", op)
 }
 
-func (sh *Shell) fail(streams Streams, err error) int {
-	fmt.Fprintf(streams.Err, "prt: %v\n", err)
+func (sh *Shell) fail(fds *filesystem.FDTable, err error) int {
+	fmt.Fprintf(fds.Stderr(), "prt: %v\n", err)
 	return sh.setStatus(2)
 }

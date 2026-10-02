@@ -2,11 +2,13 @@ package commands
 
 import (
 	"fmt"
-	"parrot/internal/engine/filesystem"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"parrot/internal/engine/clock"
+	"parrot/internal/engine/filesystem"
 )
 
 type Ls struct{}
@@ -17,10 +19,12 @@ func (ls Ls) Name() string {
 	return "ls"
 }
 
-func (ls Ls) Usage() string { return "ls [-l] [-a] [path]  — list directory contents" }
+func (ls Ls) Usage() string {
+	return "ls [-l] [-a] [-i] [path]  — list directory contents"
+}
 
 func (ls Ls) Run(ctx *Context, args []string) int {
-	var all, long bool
+	var all, long, inum bool
 	var operands []string
 	for _, arg := range args {
 		if len(arg) > 1 && arg[0] == '-' {
@@ -30,6 +34,8 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 					all = true
 				case 'l':
 					long = true
+				case 'i':
+					inum = true
 				default:
 					fmt.Fprintf(ctx.Stderr, "%s: invalid option -- '%c'\n", ls.Name(), flag)
 					return 1
@@ -45,24 +51,15 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 		path = operands[0]
 	}
 
-	nodes, err := ctx.VFS.List(path)
+	entries, err := ctx.VFS.List(path)
 	if err != nil {
 		fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", ls.Name(), path, err)
 		return 1
 	}
 
-	if !long {
-		for _, node := range nodes {
-			if !all && strings.HasPrefix(node.Name, ".") {
-				continue
-			}
-			name := node.Name
-			fmt.Fprintln(ctx.Stdout, name)
-		}
-		return 0
-	}
-
-	rows := make([]lsRow, 0, len(nodes)+2)
+	rows := make([]lsRow, 0, len(entries)+2)
+	// "." and ".." are real entries, so -a shows them the way it shows any
+	// other name rather than by inventing two rows.
 	if all {
 		if dir, err := ctx.VFS.Stat(path); err == nil && dir.IsDir() {
 			rows = append(rows, lsRow{info: dir, name: "."})
@@ -71,11 +68,22 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 			}
 		}
 	}
-	for _, node := range nodes {
-		if !all && strings.HasPrefix(node.Name, ".") {
+	for _, entry := range entries {
+		if !all && strings.HasPrefix(entry.Name, ".") {
 			continue
 		}
-		rows = append(rows, lsRow{info: node, name: node.Name})
+		rows = append(rows, lsRow{info: entry, name: entry.Name})
+	}
+
+	if !long {
+		for _, row := range rows {
+			if inum {
+				fmt.Fprintf(ctx.Stdout, "%d %s\n", row.info.Ino, row.name)
+				continue
+			}
+			fmt.Fprintln(ctx.Stdout, row.name)
+		}
+		return 0
 	}
 
 	width := 0
@@ -86,8 +94,11 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 	}
 
 	tw := tabwriter.NewWriter(ctx.Stdout, 0, 4, 1, ' ', 0)
-	now := now(ctx)
+	now := clock.Now()
 	for _, row := range rows {
+		if inum {
+			fmt.Fprintf(tw, "%d\t", row.info.Ino)
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			row.info.Mode, row.links(), row.info.Owner.Name, row.info.Owner.Primary(),
 			fmt.Sprintf("%*s", width, row.size()), row.modTime(now), row.name)

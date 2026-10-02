@@ -2,7 +2,6 @@ package filesystem
 
 import "errors"
 
-
 func CreateMissing(fsys FS, path string) (created bool, err error) {
 	_, err = fsys.Stat(path)
 	switch {
@@ -16,7 +15,6 @@ func CreateMissing(fsys FS, path string) (created bool, err error) {
 	}
 	return true, nil
 }
-
 
 func MoveViaCopy(fsys FS, src, dst string) error {
 	if err := fsys.Copy(src, dst, true); err != nil {

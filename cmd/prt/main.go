@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 
 	"parrot/internal/engine"
@@ -55,7 +57,9 @@ func runFile(app *engine.App, path string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		return 127
 	}
-	return report(app.RunScript(string(src), args))
+	return report(interruptible(func(ctx context.Context) engine.Result {
+		return app.RunScriptStream(ctx, string(src), args, os.Stdout, os.Stderr)
+	}))
 }
 
 func repl(app *engine.App, onDisk bool) int {
@@ -82,7 +86,10 @@ func repl(app *engine.App, onDisk bool) int {
 			break
 		}
 
-		result := app.Execute(scanner.Text())
+		line := scanner.Text()
+		result := interruptible(func(ctx context.Context) engine.Result {
+			return app.ExecuteStream(ctx, line, os.Stdout, os.Stderr)
+		})
 		status = report(result)
 		if result.Exited {
 			return status
@@ -94,6 +101,36 @@ func repl(app *engine.App, onDisk bool) int {
 		return 1
 	}
 	return status
+}
+
+// interruptible runs one piece of input with Ctrl+C wired to cancel it.
+func interruptible(run func(ctx context.Context) engine.Result) engine.Result {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sig:
+			cancel()
+		case <-done:
+		}
+	}()
+
+	return run(ctx)
+}
+
+// report echoes what a terminal shows for an interrupted command
+func report(result engine.Result) int {
+	if result.Interrupted {
+		fmt.Fprintln(os.Stdout, "^C")
+	}
+	return result.ExitCode
 }
 
 func login(app *engine.App, scanner *bufio.Scanner) bool {
@@ -118,10 +155,4 @@ func login(app *engine.App, scanner *bufio.Scanner) bool {
 		}
 		return true
 	}
-}
-
-func report(result engine.Result) int {
-	fmt.Fprint(os.Stdout, result.Stdout)
-	fmt.Fprint(os.Stderr, result.Stderr)
-	return result.ExitCode
 }
