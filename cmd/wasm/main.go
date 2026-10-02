@@ -28,6 +28,14 @@ func fail(app *engine.App, message string) map[string]any {
 func main() {
 	js.Global().Set("__engineReady", js.ValueOf(true))
 	var app = engine.NewApp()
+	// TODO(stream-io): the engine can already stream output and be cancelled,
+	// but nothing here uses it yet. To connect it:
+	//   - app.SetYield with a function that parks on a MessageChannel, so a
+	//     loop that never blocks still lets the page deliver a keypress.
+	//   - execute returns a Promise and takes an onChunk callback, calling
+	//     app.ExecuteStream on a goroutine instead of the blocking app.Execute.
+	//   - an interrupt() global that cancels the context ExecuteStream was given.
+	//   - Terminal.tsx and wasm-bridge.ts change with it: they move together.
 	js.Global().Set("execute", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 1 || args[0].Type() != js.TypeString {
 			return fail(app, "execute: expected a string")
