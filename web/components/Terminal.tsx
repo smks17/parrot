@@ -5,6 +5,8 @@ import { complete, execute, loadEngine, loadSession, upload } from "@/lib/wasm-b
 import { fetchSession } from "@/lib/backend";
 import styles from "./Terminal.module.css";
 
+const MAX_ENTRIES = 500;
+
 interface Entry {
   cwd: string;
   line: string;
@@ -69,7 +71,9 @@ export default function Terminal() {
 
   function runLine(line: string) {
     const res = execute(line);
-    setEntries((prev) => [...prev, { cwd, line, stdout: res.stdout, stderr: res.stderr }]);
+    setEntries((prev) =>
+      [...prev, { cwd, line, stdout: res.stdout, stderr: res.stderr }].slice(-MAX_ENTRIES)
+    );
     setCwd(res.cwd);
     setHistory((prev) => [...prev, line]);
     setHistoryIndex(null);
@@ -161,15 +165,17 @@ export default function Terminal() {
       })
     );
 
-    setEntries((prev) => [
-      ...prev,
-      ...results.map(({ file, res }) => ({
-        cwd,
-        line: `upload ${file.name}`,
-        stdout: res.stdout,
-        stderr: res.stderr,
-      })),
-    ]);
+    setEntries((prev) =>
+      [
+        ...prev,
+        ...results.map(({ file, res }) => ({
+          cwd,
+          line: `upload ${file.name}`,
+          stdout: res.stdout,
+          stderr: res.stderr,
+        })),
+      ].slice(-MAX_ENTRIES)
+    );
     if (results.length > 0) {
       setCwd(results[results.length - 1].res.cwd);
     }
