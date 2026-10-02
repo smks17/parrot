@@ -53,15 +53,13 @@ func (c Chmod) Run(ctx *Context, args []string) int {
 	}
 
 	exit := 0
-	var changeMod func(n *vfs.Node) error
-	changeMod = func(n *vfs.Node) error {
-		err := ctx.VFS.ChmodNode(n, mode)
-		if err != nil {
-			return fmt.Errorf("%s: %s: %v\n", c.Name(), n.Path(), err)
+	// The walk carries the path, because an inode cannot say what it is called.
+	err = node.Walk(path, func(p string, n *vfs.Inode) error {
+		if err := ctx.VFS.ChmodNode(n, mode); err != nil {
+			return fmt.Errorf("%s: %s: %v\n", c.Name(), p, err)
 		}
 		return nil
-	}
-	err = node.Walk(changeMod)
+	})
 	if err != nil {
 		fmt.Fprint(ctx.Stderr, err.Error())
 		exit = 1

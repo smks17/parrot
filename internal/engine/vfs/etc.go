@@ -6,7 +6,7 @@ import (
 	"parrot/internal/engine/user"
 )
 
-func seedEtc(root *Node) {
+func seedEtc(root *Inode) {
 	files := []struct {
 		name, content string
 		mode          FileMode
@@ -21,10 +21,10 @@ func seedEtc(root *Node) {
 	}
 
 	etcName := path.Base(user.EtcDir)
-	etc, ok := root.Children[etcName]
+	etc, ok := root.Lookup(etcName)
 	if !ok {
-		etc = NewDir(etcName, rootOwner())
-		root.AddChild(etc)
+		etc = NewDir(rootOwner())
+		_ = root.Link(etcName, etc)
 	}
 	// Someone has put a file where /etc goes. Leave it alone rather than
 	// destroying it to make room.
@@ -33,9 +33,9 @@ func seedEtc(root *Node) {
 	}
 
 	for _, f := range files {
-		if _, exists := etc.Children[f.name]; exists {
+		if _, exists := etc.Lookup(f.name); exists {
 			continue
 		}
-		etc.AddChild(NewFile(f.name, []byte(f.content), rootOwner()).setOwner(rootOwner(), f.mode))
+		_ = etc.Link(f.name, NewFile([]byte(f.content), rootOwner()).setOwner(rootOwner(), f.mode))
 	}
 }

@@ -53,7 +53,7 @@ func (date Date) Run(ctx *Context, args []string) int {
 		}
 	}
 
-	shown := now(ctx)
+	shown := clock.Now()
 	if setting {
 		if ctx.User.Name != user.RootName {
 			fmt.Fprintf(ctx.Stderr, "%s: cannot set date: Operation not permitted\n", date.Name())
