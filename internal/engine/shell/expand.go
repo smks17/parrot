@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"parrot/internal/engine/vfs"
 )
 
 // fields collects the strings a word expands to. One is being built at any
@@ -50,10 +52,10 @@ func (f *fields) result() []string {
 	return f.all
 }
 
-func (sh *Shell) expandWords(words []Word, io Streams) ([]string, error) {
+func (sh *Shell) expandWords(words []Word, fds *vfs.FDTable) ([]string, error) {
 	var pieces []string
 	for _, word := range words {
-		expanded, err := sh.expandWord(word, io)
+		expanded, err := sh.expandWord(word, fds)
 		if err != nil {
 			return nil, err
 		}
@@ -62,7 +64,7 @@ func (sh *Shell) expandWords(words []Word, io Streams) ([]string, error) {
 	return pieces, nil
 }
 
-func (sh *Shell) expandWord(word Word, io Streams) ([]string, error) {
+func (sh *Shell) expandWord(word Word, fds *vfs.FDTable) ([]string, error) {
 	if len(word) == 1 && word[0].Quote == Double && word[0].Text == "$@" {
 		return append([]string(nil), sh.params...), nil
 	}
@@ -75,7 +77,7 @@ func (sh *Shell) expandWord(word Word, io Streams) ([]string, error) {
 			continue
 		}
 
-		text, err := sh.expandText(piece.Text, io)
+		text, err := sh.expandText(piece.Text, fds)
 		if err != nil {
 			return nil, err
 		}
@@ -92,8 +94,8 @@ func (sh *Shell) expandWord(word Word, io Streams) ([]string, error) {
 
 // expandOne expands a word that cannot become more than one string: the value
 // of an assignment, or the file a redirection names.
-func (sh *Shell) expandOne(word Word, io Streams) (string, error) {
-	fields, err := sh.expandWord(word, io)
+func (sh *Shell) expandOne(word Word, fds *vfs.FDTable) (string, error) {
+	fields, err := sh.expandWord(word, fds)
 	if err != nil {
 		return "", err
 	}
@@ -101,7 +103,7 @@ func (sh *Shell) expandOne(word Word, io Streams) (string, error) {
 }
 
 // expandText replaces every $... in a piece of text.
-func (sh *Shell) expandText(text string, io Streams) (string, error) {
+func (sh *Shell) expandText(text string, fds *vfs.FDTable) (string, error) {
 	var out strings.Builder
 	for i := 0; i < len(text); {
 		if text[i] != '$' {
@@ -111,7 +113,7 @@ func (sh *Shell) expandText(text string, io Streams) (string, error) {
 		}
 		// scanDollar, in lexer.go, already knows where a $... ends.
 		end := scanDollar(text, i)
-		value, err := sh.expandDollar(text[i:end], io)
+		value, err := sh.expandDollar(text[i:end], fds)
 		if err != nil {
 			return "", err
 		}
@@ -122,11 +124,11 @@ func (sh *Shell) expandText(text string, io Streams) (string, error) {
 }
 
 // expandDollar takes one whole $... and returns what it stands for.
-func (sh *Shell) expandDollar(src string, io Streams) (string, error) {
+func (sh *Shell) expandDollar(src string, fds *vfs.FDTable) (string, error) {
 	body := src[1:] // drop the $
 	switch {
 	case strings.HasPrefix(body, "(("): // $((1 + 2))
-		value, err := sh.arith(strings.TrimSuffix(body[2:], "))"), io)
+		value, err := sh.arith(strings.TrimSuffix(body[2:], "))"), fds)
 		if err != nil {
 			return "", err
 		}
@@ -134,11 +136,11 @@ func (sh *Shell) expandDollar(src string, io Streams) (string, error) {
 
 	case strings.HasPrefix(body, "("): // $(echo hi)
 		var out bytes.Buffer
-		sh.Run(trimEnds(body), Streams{In: strings.NewReader(""), Out: &out, Err: io.Err})
+		sh.Run(trimEnds(body), vfs.NewStdTable(strings.NewReader(""), &out, fds.Stderr()))
 		return strings.TrimRight(out.String(), "\n"), nil
 
 	case strings.HasPrefix(body, "{"): // ${name}, ${name:-default}, ${#name}
-		return sh.expandBrace(trimEnds(body), io)
+		return sh.expandBrace(trimEnds(body), fds)
 	}
 	return sh.variable(body), nil
 }
@@ -150,7 +152,7 @@ func trimEnds(s string) string {
 	return s[1 : len(s)-1]
 }
 
-func (sh *Shell) expandBrace(inner string, io Streams) (string, error) {
+func (sh *Shell) expandBrace(inner string, fds *vfs.FDTable) (string, error) {
 	if name, ok := strings.CutPrefix(inner, "#"); ok {
 		return strconv.Itoa(len(sh.variable(name))), nil // ${#name} is a length
 	}
@@ -158,7 +160,7 @@ func (sh *Shell) expandBrace(inner string, io Streams) (string, error) {
 		if value := sh.variable(name); value != "" {
 			return value, nil
 		}
-		return sh.expandText(fallback, io) // ${name:-default}
+		return sh.expandText(fallback, fds) // ${name:-default}
 	}
 
 	// Anything else — ${name#pattern} and the rest of the family — is not
@@ -211,10 +213,10 @@ var precedence = map[string]int{
 	"*": 6, "/": 6, "%": 6,
 }
 
-func (sh *Shell) arith(src string, io Streams) (int, error) {
+func (sh *Shell) arith(src string, fds *vfs.FDTable) (int, error) {
 	// $1 and $x are replaced first, so the rest of this file only has to
 	// know about numbers, plain names and operators.
-	src, err := sh.expandText(src, io)
+	src, err := sh.expandText(src, fds)
 	if err != nil {
 		return 0, err
 	}

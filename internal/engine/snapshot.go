@@ -52,7 +52,7 @@ func (s *Session) Snapshot() ([]byte, error) {
 		}
 	}
 	snap := snapshot{
-		Root:    s.fs.RootNode().Dump(),
+		Root:    s.fs.RootInode().Dump(""),
 		Cwd:     s.fs.Cwd(),
 		Env:     s.shell.Vars(),
 		History: history,
@@ -74,7 +74,7 @@ func LoadSession(data []byte) (*Session, error) {
 		clock.SetLocal(snap.Zone, snap.ZoneOffset)
 	}
 
-	session := newSession(vfs.FromRoot(snap.Root.ToNode(), snap.Cwd))
+	session := newSession(vfs.FromRoot(snap.Root.ToInode(), snap.Cwd))
 
 	if snap.User != "" {
 		session.SetUser(snap.User)

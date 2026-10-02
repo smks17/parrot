@@ -1,11 +1,10 @@
 package commands
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"maps"
-	"parrot/internal/engine/clock"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 	"slices"
@@ -27,7 +26,12 @@ type HistoryEntry struct {
 }
 
 type Context struct {
-	VFS     *vfs.VFS
+	Ctx context.Context
+	VFS *vfs.VFS
+
+	// Fds is the process's descriptor table. Stdin, Stdout and Stderr
+	Fds *vfs.FDTable
+
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
@@ -38,10 +42,9 @@ type Context struct {
 	SwitchUser func(name, password string) error
 }
 
-// now is the shell's clock, in the zone TZ names. Without TZ it stays on the
-// host's own zone — in the browser that is whatever the tab is set to.
-func now(ctx *Context) time.Time {
-	return clock.In(ctx.Env["TZ"])
+// Interrupted reports whether the user has asked for the running command to stop.
+func (c *Context) Interrupted() bool {
+	return c.Ctx != nil && c.Ctx.Err() != nil
 }
 
 // input is what a filter reads: stdin when no files are named, otherwise the
@@ -55,12 +58,12 @@ func input(ctx *Context, name string, files []string) (io.Reader, int) {
 	}
 	readers := make([]io.Reader, 0, len(files))
 	for _, file := range files {
-		content, err := ctx.VFS.Read(file)
+		rc, err := ctx.VFS.OpenDefault(file)
 		if err != nil {
 			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", name, file, err)
 			return nil, 1
 		}
-		readers = append(readers, bytes.NewReader(content))
+		readers = append(readers, rc)
 	}
 	return io.MultiReader(readers...), 0
 }

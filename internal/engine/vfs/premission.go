@@ -106,11 +106,15 @@ const (
 	permExec
 )
 
-func (f *VFS) getPermClass(n *Node) PermClass {
-	if n.Owner.User == f.id.Name {
+func (f *VFS) getPermClass(n *Inode) PermClass {
+	return f.permClass(n.Owner())
+}
+
+func (f *VFS) permClass(owner Ownership) PermClass {
+	if owner.User == f.id.Name {
 		return UserPerm
 	}
-	if f.id.InGroup(n.Owner.Group) {
+	if f.id.InGroup(owner.Group) {
 		return GroupPerm
 	}
 	return OtherUserPerm
@@ -119,7 +123,7 @@ func (f *VFS) getPermClass(n *Node) PermClass {
 // checkPerm is the gate in front of every VFS operation. It compares the
 // VFS's current user against the node's owner, picks the matching bit
 // class, and refuses with ErrPermission when a needed bit is missing.
-func (f *VFS) checkPerm(n *Node, need permBits) error {
+func (f *VFS) checkPerm(n *Inode, need permBits) error {
 	if n == nil {
 		return ErrNotExist
 	}
@@ -127,14 +131,15 @@ func (f *VFS) checkPerm(n *Node, need permBits) error {
 		return nil
 	}
 
-	permClass := f.getPermClass(n)
-	if need&permRead != 0 && !n.Mode.CanRead(permClass) {
+	owner, mode := n.meta()
+	permClass := f.permClass(owner)
+	if need&permRead != 0 && !mode.CanRead(permClass) {
 		return ErrPermission
 	}
-	if need&permWrite != 0 && !n.Mode.CanWrite(permClass) {
+	if need&permWrite != 0 && !mode.CanWrite(permClass) {
 		return ErrPermission
 	}
-	if need&permExec != 0 && !n.Mode.CanExecute(permClass) {
+	if need&permExec != 0 && !mode.CanExecute(permClass) {
 		return ErrPermission
 	}
 	return nil
@@ -143,14 +148,14 @@ func (f *VFS) checkPerm(n *Node, need permBits) error {
 // checkOwnership gates the metadata-changing operations (chmod, chown):
 // only the file's owner may change them. That is Unix EPERM — a different
 // error from the EACCES that checkPerm returns.
-func (f *VFS) checkOwnership(n *Node) error {
+func (f *VFS) checkOwnership(n *Inode) error {
 	if n == nil {
 		return ErrNotExist
 	}
 	if f.id.IsRoot() {
 		return nil
 	}
-	if n.Owner.User != f.id.Name {
+	if n.Owner().User != f.id.Name {
 		return ErrNotOwner
 	}
 	return nil

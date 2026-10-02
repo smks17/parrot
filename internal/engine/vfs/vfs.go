@@ -3,15 +3,14 @@ package vfs
 import (
 	"errors"
 	"path"
-	"sort"
 	"strings"
 
 	"parrot/internal/engine/user"
 )
 
 type VFS struct {
-	root *Node
-	cwd  *Node
+	root *Inode
+	cwd  *Inode
 	id   user.Identity
 	db   *user.DB
 }
@@ -19,7 +18,7 @@ type VFS struct {
 func rootOwner() Ownership { return Ownership{User: user.RootName, Group: user.RootGroup} }
 
 func New() *VFS {
-	root := NewDir("", rootOwner())
+	root := newRoot(rootOwner())
 	seedEtc(root)
 
 	f := newVFS(root, root)
@@ -32,12 +31,14 @@ func New() *VFS {
 	for _, dir := range []string{
 		"books", "club", "projects", "memories", "downloads", "secrets",
 	} {
-		root.AddChild(NewDir(dir, residentOwner))
+		_ = root.Link(dir, NewDir(residentOwner))
 	}
-	root.AddChild(NewFile("README.md", []byte(
+	_ = root.Link("README.md", NewFile([]byte(
 		"Welcome.\n\nYou are in a terminal that isn't quite real.\nTry: ls, cd, cat\n",
 	), rootOwner()))
-	root.Children["club"].setOwner(Ownership{user.RootName, user.DevGroup}, 0770|ModeDirectory)
+	if club, ok := root.Lookup("club"); ok {
+		club.setOwner(Ownership{user.RootName, user.DevGroup}, 0770|ModeDirectory)
+	}
 
 	// /home is created as root on the way to the first home under it.
 	for _, id := range f.db.Accounts() {
@@ -56,33 +57,30 @@ func New() *VFS {
 	return f
 }
 
-func makeHome(root *Node, id user.Identity, mode FileMode) {
+func makeHome(root *Inode, id user.Identity, mode FileMode) {
 	segments := strings.Split(strings.Trim(id.Home, "/"), "/")
 	if len(segments) == 1 && segments[0] == "" {
 		return // an account living at / has nothing to create
 	}
 	dir := root
 	for _, seg := range segments[:len(segments)-1] {
-		next, ok := dir.Children[seg]
+		next, ok := dir.Lookup(seg)
 		if !ok {
-			next = NewDir(seg, rootOwner())
-			dir.AddChild(next)
+			next = NewDir(rootOwner())
+			if err := dir.Link(seg, next); err != nil {
+				return
+			}
 		}
 		if !next.IsDir() {
 			return // a file sits where this home needs a directory
 		}
 		dir = next
 	}
-	name := segments[len(segments)-1]
-	if _, exists := dir.Children[name]; exists {
-		return
-	}
-	dir.AddChild(NewDir(name, OwnedBy(id)).setOwner(OwnedBy(id), mode))
+	home := NewDir(OwnedBy(id)).setOwner(OwnedBy(id), mode)
+	_ = dir.Link(segments[len(segments)-1], home)
 }
 
-func FromRoot(root *Node, cwd string) *VFS {
-	seedEtc(root)
-
+func FromRoot(root *Inode, cwd string) *VFS {
 	f := newVFS(root, root)
 	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
 		f.cwd = dir
@@ -90,7 +88,7 @@ func FromRoot(root *Node, cwd string) *VFS {
 	return f
 }
 
-func newVFS(root, cwd *Node) *VFS {
+func newVFS(root, cwd *Inode) *VFS {
 	return &VFS{root: root, cwd: cwd, db: user.NewDB(accounts{root: root})}
 }
 
@@ -104,53 +102,39 @@ func (f *VFS) RootUser() (user.Identity, error) { return f.db.Root() } //TODO: D
 
 func (f *VFS) User() string { return f.id.Name }
 
-func (f *VFS) Cwd() string {
-	return f.cwd.Path()
-}
+func (f *VFS) Cwd() string { return f.cwd.Path() }
 
-func (f *VFS) RootNode() *Node {
-	return f.root
-}
+func (f *VFS) RootInode() *Inode { return f.root }
 
-func (f *VFS) Resolve(path string) (*Node, error) {
-	curr := f.cwd
-	if strings.HasPrefix(path, "/") {
-		curr = f.root
+func (f *VFS) Resolve(p string) (*Inode, error) {
+	current := f.cwd
+	if strings.HasPrefix(p, "/") {
+		current = f.root
 	}
 
-	for _, seg := range strings.Split(path, "/") {
-		if seg == "" || seg == "." {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" {
 			continue
 		}
-
-		if seg == ".." {
-			if curr.Parent != nil {
-				curr = curr.Parent
-			}
-			continue
-		}
-
-		if !curr.IsDir() {
+		if !current.IsDir() {
 			return nil, ErrNotDir
 		}
-
-		// Looking up a name inside a directory needs execute on it
-		if err := f.checkPerm(curr, permExec); err != nil {
+		// Looking a name up inside a directory needs execute on it
+		if err := f.checkPerm(current, permExec); err != nil {
 			return nil, err
 		}
-
-		next, ok := curr.Children[seg]
+		next, ok := current.Lookup(seg)
 		if !ok {
 			return nil, ErrNotExist
 		}
-		curr = next
+		current = next
 	}
 
-	return curr, nil
+	return current, nil
 }
 
-func (f *VFS) Chdir(path string) error {
-	dir, err := f.Resolve(path)
+func (f *VFS) Chdir(p string) error {
+	dir, err := f.Resolve(p)
 	if err != nil {
 		return err
 	}
@@ -165,10 +149,10 @@ func (f *VFS) Chdir(path string) error {
 	return nil
 }
 
-func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
-	trimmed := strings.TrimRight(path, "/")
+func (f *VFS) splitPath(p string) (parent *Inode, name string, err error) {
+	trimmed := strings.TrimRight(p, "/")
 	if trimmed == "" {
-		return nil, "", ErrExists // the root always exists
+		return nil, "", ErrInvalid // the root is nobody's entry
 	}
 	parentPath, name := ".", trimmed
 	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
@@ -176,6 +160,9 @@ func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
 		if parentPath == "" {
 			parentPath = "/"
 		}
+	}
+	if name == currDir || name == preDir {
+		return nil, "", ErrInvalid
 	}
 
 	parent, err = f.Resolve(parentPath)
@@ -185,133 +172,183 @@ func (f *VFS) splitParent(path string) (parent *Node, name string, err error) {
 	if !parent.IsDir() {
 		return nil, "", ErrNotDir
 	}
-	if _, exists := parent.Children[name]; exists {
+	return parent, name, nil
+}
+
+func (f *VFS) splitParent(p string) (parent *Inode, name string, err error) {
+	parent, name, err = f.splitPath(p)
+	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return nil, "", ErrExists // the root always exists
+		}
+		return nil, "", err
+	}
+	if _, exists := parent.Lookup(name); exists {
 		return nil, "", ErrExists
 	}
 	return parent, name, nil
 }
 
-func (f *VFS) Mkdir(path string) error {
-	parent, name, err := f.splitParent(path)
+func (f *VFS) OpenDefault(p string) (*File, error) {
+	return f.Open(p, O_RDONLY)
+}
+
+func (f *VFS) Open(p string, flags OpenFlags) (*File, error) {
+	node, err := f.Resolve(p)
+	if err != nil {
+		if !errors.Is(err, ErrNotExist) || flags&O_CREATE == 0 {
+			return nil, err
+		}
+		if err := f.Create(p); err != nil {
+			return nil, err
+		}
+		if node, err = f.Resolve(p); err != nil {
+			return nil, err
+		}
+	}
+	var need permBits
+	if flags.readable() {
+		need |= permRead
+	}
+	if flags.writable() {
+		need |= permWrite
+	}
+	if err := f.checkPerm(node, need); err != nil {
+		return nil, err
+	}
+	return OpenFile(node, flags)
+}
+
+func (f *VFS) create(p string, node *Inode) error {
+	parent, name, err := f.splitParent(p)
 	if err != nil {
 		return err
 	}
-	// Creating an entry is a write on the parent directory + the search to reach into it
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	parent.AddChild(NewDir(name, OwnedBy(f.id)))
-	return nil
+	return parent.Link(name, node)
 }
 
-func (f *VFS) Create(path string) error {
-	parent, name, err := f.splitParent(path)
+func (f *VFS) Mkdir(p string) error { return f.create(p, NewDir(OwnedBy(f.id))) }
+
+func (f *VFS) Create(p string) error { return f.create(p, NewFile(nil, OwnedBy(f.id))) }
+
+// Link is link(2): one more name for an inode that already exists. Directories
+// are refused, as they are on Linux, because a cycle of them would leave the
+// tree with no way out.
+func (f *VFS) Link(oldPath, newPath string) error {
+	node, err := f.Resolve(oldPath)
 	if err != nil {
 		return err
 	}
-	// Creating an entry is a write on the parent directory + the search to reach into it
+	if node.IsDir() {
+		return ErrLinkDir
+	}
+	parent, name, err := f.destination(oldPath, newPath)
+	if err != nil {
+		return err
+	}
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	parent.AddChild(NewFile(name, nil, OwnedBy(f.id)))
-	return nil
+	return parent.Link(name, node)
 }
 
-func (f *VFS) Write(path string, b []byte, writeAppend bool) error {
-	nodeFile, err := f.Resolve(path)
+func (f *VFS) Write(p string, b []byte, writeAppend bool) error {
+	node, err := f.Resolve(p)
 	if err != nil {
 		return err
 	}
-	if err := f.checkPerm(nodeFile, permWrite); err != nil {
+	if err := f.checkPerm(node, permWrite); err != nil {
 		return err
 	}
-	if nodeFile.IsDir() {
+	if node.IsDir() {
 		return ErrIsDir
 	}
 	if writeAppend {
-		nodeFile.Append(b)
+		node.Append(b)
 	} else {
-		nodeFile.Override(b)
+		node.Override(b)
 	}
 	return nil
-
 }
 
-func (f *VFS) Read(path string) ([]byte, error) {
-	nodeFile, err := f.Resolve(path)
+func (f *VFS) Read(p string) ([]byte, error) {
+	node, err := f.Resolve(p)
 	if err != nil {
 		return nil, err
 	}
-	if err := f.checkPerm(nodeFile, permRead); err != nil {
+	if err := f.checkPerm(node, permRead); err != nil {
 		return nil, err
 	}
-	if nodeFile.IsDir() {
+	if node.IsDir() {
 		return nil, ErrIsDir
 	}
-	return nodeFile.Content, nil
+	return node.Bytes(), nil
 }
 
-func (f *VFS) List(path string) ([]*Node, error) {
-	nodeFile, err := f.Resolve(path)
+// List reads a directory. Reading the names in one is its read bit, where
+// reaching a name through it is its execute bit.
+func (f *VFS) List(p string) ([]Dirent, error) {
+	node, err := f.Resolve(p)
 	if err != nil {
 		return nil, err
 	}
-	if !nodeFile.IsDir() {
-		return []*Node{nodeFile}, nil
+	if !node.IsDir() {
+		return []Dirent{{Name: path.Base(strings.TrimRight(p, "/")), Inode: node}}, nil
 	}
-	// Reading the names inside a directory is the directory's read bit.
-	if err := f.checkPerm(nodeFile, permRead); err != nil {
+	if err := f.checkPerm(node, permRead); err != nil {
 		return nil, err
 	}
-	var sortedNode []*Node
-	for _, node := range nodeFile.Children {
-		sortedNode = append(sortedNode, node)
-	}
-	sort.Slice(sortedNode, func(i, j int) bool {
-		return sortedNode[i].Name < sortedNode[j].Name
-	})
-	return sortedNode, nil
+	return node.Entries(), nil
 }
 
-func (f *VFS) Remove(path string, recursive bool) error {
-	node, err := f.Resolve(path)
+func (f *VFS) Remove(p string, recursive bool) error {
+	parent, name, err := f.splitPath(p)
 	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			// The root is no directory's entry, and "rm -rf /" should not empty
+			// the world.
+			return ErrRootRemove
+		}
 		return err
 	}
-
-	// The root has no parent to unlink from, and "rm -rf /" should not empty
-	// the world.
-	if node.Parent == nil {
-		return ErrRootRemove
+	node, ok := parent.Lookup(name)
+	if !ok {
+		return ErrNotExist
 	}
 	// Unlinking is a write on the directory the entry lives in
-	if err := f.checkPerm(node.Parent, permWrite|permExec); err != nil {
+	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	if node.IsDir() && len(node.Children) > 0 && !recursive {
+	if node.IsDir() && node.NumEntries() > 0 && !recursive {
 		return ErrNotEmptyDir
 	}
-	node.Parent.removeChild(node.Name)
-	return nil
+	return parent.Unlink(name)
 }
 
-func (f *VFS) destination(src, dst string) (parent *Node, name string, err error) {
-	if dstNode, err := f.Resolve(dst); err == nil && dstNode.IsDir() {
-		return dstNode, path.Base(strings.TrimRight(src, "/")), nil
+func (f *VFS) destination(src, dst string) (parent *Inode, name string, err error) {
+	if node, err := f.Resolve(dst); err == nil && node.IsDir() {
+		name := path.Base(strings.TrimRight(src, "/"))
+		if _, exists := node.Lookup(name); exists {
+			return nil, "", ErrExists
+		}
+		return node, name, nil
 	}
 	return f.splitParent(dst)
 }
 
 func (f *VFS) Copy(src, dst string, recursive bool) error {
-	srcNode, err := f.Resolve(src)
+	node, err := f.Resolve(src)
 	if err != nil {
 		return err
 	}
-	if !recursive && srcNode.IsDir() && len(srcNode.Children) > 0 {
+	if !recursive && node.IsDir() && node.NumEntries() > 0 {
 		return ErrNotEmptyDir
 	}
 	// Copying reads the source's content.
-	if err := f.checkPerm(srcNode, permRead); err != nil {
+	if err := f.checkPerm(node, permRead); err != nil {
 		return err
 	}
 	parent, name, err := f.destination(src, dst)
@@ -322,27 +359,29 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	newNode := srcNode.Clone()
-	newNode.Name = name
-	// TODO: It should be handle in node.go
-	newNode.Walk(func(n *Node) error {
+	// A copy is new inodes, not another name for the old ones: that is what
+	// separates cp from ln.
+	copied := node.Clone()
+	_ = copied.Walk("", func(_ string, n *Inode) error {
 		n.Touch()
 		return nil
 	})
-	parent.AddChild(newNode)
-	return nil
+	return parent.Link(name, copied)
 }
 
 func (f *VFS) Move(src, dst string) error {
-	srcNode, err := f.Resolve(src)
+	node, err := f.Resolve(src)
 	if err != nil {
 		return err
 	}
-	if srcNode.Path() == "/" {
+	if node == f.root {
 		return ErrRootRemove
 	}
-	// A rename is a write on the directory the entry leaves + one on the directory it lands in
-	if err := f.checkPerm(srcNode.Parent, permWrite|permExec); err != nil {
+	srcParent, srcName, err := f.splitPath(src)
+	if err != nil {
+		return err
+	}
+	if err := f.checkPerm(srcParent, permWrite|permExec); err != nil {
 		return err
 	}
 	parent, name, err := f.destination(src, dst)
@@ -352,40 +391,42 @@ func (f *VFS) Move(src, dst string) error {
 	if err := f.checkPerm(parent, permWrite|permExec); err != nil {
 		return err
 	}
-	srcNode.Parent.removeChild(srcNode.Name)
-	srcNode.Name = name
-	parent.AddChild(srcNode)
+	if err := srcParent.Unlink(srcName); err != nil {
+		return err
+	}
+	if err := parent.Link(name, node); err != nil {
+		// Put it back rather than leave it with no name at all.
+		_ = srcParent.Link(srcName, node)
+		return err
+	}
 	return nil
 }
 
-func (f *VFS) Chmod(path string, mode FileMode) error {
-	node, err := f.Resolve(path)
+func (f *VFS) Chmod(p string, mode FileMode) error {
+	node, err := f.Resolve(p)
 	if err != nil {
 		return err
 	}
 	return f.ChmodNode(node, mode)
 }
 
-func (f *VFS) ChmodNode(n *Node, mode FileMode) error {
+func (f *VFS) ChmodNode(n *Inode, mode FileMode) error {
 	if err := f.checkOwnership(n); err != nil {
 		return err
 	}
-	// Clear existing permission bits
-	n.Mode &= ^FileMode(0777)
-	// Set new permission bits
-	n.Mode |= mode & 0777
+	n.setPerm(mode)
 	return nil
 }
 
-func (f *VFS) Chown(path, owner, group string) error {
-	node, err := f.Resolve(path)
+func (f *VFS) Chown(p, owner, group string) error {
+	node, err := f.Resolve(p)
 	if err != nil {
 		return err
 	}
 	return f.ChownNode(node, owner, group)
 }
 
-func (f *VFS) ChownNode(n *Node, owner, group string) error {
+func (f *VFS) ChownNode(n *Inode, owner, group string) error {
 	if n == nil {
 		return ErrNotExist
 	}
@@ -401,25 +442,20 @@ func (f *VFS) ChownNode(n *Node, owner, group string) error {
 		if owner != "" {
 			return ErrNotOwner
 		}
-		if group != "" && (n.Owner.User != f.id.Name || !f.id.InGroup(group)) {
+		if group != "" && (n.Owner().User != f.id.Name || !f.id.InGroup(group)) {
 			return ErrNotOwner
 		}
 	}
 
-	if owner != "" {
-		n.Owner.User = owner
-	}
-	if group != "" {
-		n.Owner.Group = group
-	}
+	n.chown(owner, group)
 	return nil
 }
 
-func (f *VFS) Touch(path string) error {
-	node, err := f.Resolve(path)
+func (f *VFS) Touch(p string) error {
+	node, err := f.Resolve(p)
 	if err != nil {
 		if errors.Is(err, ErrNotExist) {
-			return f.Create(path)
+			return f.Create(p)
 		}
 		return err
 	}
