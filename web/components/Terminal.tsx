@@ -5,6 +5,8 @@ import { complete, execute, loadEngine, loadSession, upload } from "@/lib/wasm-b
 import { fetchSession } from "@/lib/backend";
 import styles from "./Terminal.module.css";
 
+const MAX_ENTRIES = 500;
+
 interface Entry {
   at: string;
   user: string;
@@ -80,7 +82,7 @@ export default function Terminal() {
     const res = execute(line);
     // The entry keeps the prompt the line was typed at, so a `su` shows up
     // on the next line rather than rewriting its own.
-    setEntries((prev) => [...prev, { at: res.at, user, cwd, line, stdout: res.stdout, stderr: res.stderr }]);
+    setEntries((prev) => [...prev, { at: res.at, user, cwd, line, stdout: res.stdout, stderr: res.stderr }].slice(-MAX_ENTRIES));
     setCwd(res.cwd);
     setUser(res.user);
     setHistory((prev) => [...prev, line]);
@@ -183,7 +185,7 @@ export default function Terminal() {
         stdout: res.stdout,
         stderr: res.stderr,
       })),
-    ]);
+    ].slice(-MAX_ENTRIES));
     if (results.length > 0) {
       setCwd(results[results.length - 1].res.cwd);
       setUser(results[results.length - 1].res.user);
