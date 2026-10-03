@@ -3,6 +3,7 @@ package vfs
 import (
 	"strings"
 
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
 
@@ -25,16 +26,16 @@ func (a accounts) ReadRaw(p string) ([]byte, error) {
 			continue
 		}
 		if !curr.IsDir() {
-			return nil, ErrNotDir
+			return nil, filesystem.ErrNotDir
 		}
 		next, ok := curr.Lookup(seg)
 		if !ok {
-			return nil, ErrNotExist
+			return nil, filesystem.ErrNotExist
 		}
 		curr = next
 	}
 	if curr.IsDir() {
-		return nil, ErrIsDir
+		return nil, filesystem.ErrIsDir
 	}
 	return curr.Bytes(), nil
 }

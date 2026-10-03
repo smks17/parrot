@@ -1,4 +1,6 @@
-package vfs
+package filesystem
+
+import "parrot/internal/engine/user"
 
 // FileMode holds the nine permission bits as a Unix-style octal value.
 // 0644 == rw-r--r--, 0755 == rwxr-xr-x.
@@ -98,64 +100,53 @@ func (m FileMode) IsDirectory() bool {
 
 // permBits is what a VFS operation needs from a node. Create and Remove
 // need write AND exec on the parent directory — never on the entry.
-type permBits uint8
+type PermBits uint8
 
 const (
-	permRead permBits = 1 << iota
-	permWrite
-	permExec
+	PermRead PermBits = 1 << iota
+	PermWrite
+	PermExec
 )
 
-func (f *VFS) getPermClass(n *Inode) PermClass {
-	return f.permClass(n.Owner())
+// Ownership is who a file belongs to: the two names it records.
+type Ownership struct {
+	User  string
+	Group string
 }
 
-func (f *VFS) permClass(owner Ownership) PermClass {
-	if owner.User == f.id.Name {
+func PermClassOf(owner Ownership, actor user.Identity) PermClass {
+	if owner.User == actor.Name {
 		return UserPerm
 	}
-	if f.id.InGroup(owner.Group) {
+	if actor.InGroup(owner.Group) {
 		return GroupPerm
 	}
 	return OtherUserPerm
 }
 
-// checkPerm is the gate in front of every VFS operation. It compares the
-// VFS's current user against the node's owner, picks the matching bit
-// class, and refuses with ErrPermission when a needed bit is missing.
-func (f *VFS) checkPerm(n *Inode, need permBits) error {
-	if n == nil {
-		return ErrNotExist
-	}
-	if f.id.IsRoot() {
+func CheckPerm(mode FileMode, owner Ownership, actor user.Identity, need PermBits) error {
+	if actor.IsRoot() {
 		return nil
 	}
 
-	owner, mode := n.meta()
-	permClass := f.permClass(owner)
-	if need&permRead != 0 && !mode.CanRead(permClass) {
+	class := PermClassOf(owner, actor)
+	if need&PermRead != 0 && !mode.CanRead(class) {
 		return ErrPermission
 	}
-	if need&permWrite != 0 && !mode.CanWrite(permClass) {
+	if need&PermWrite != 0 && !mode.CanWrite(class) {
 		return ErrPermission
 	}
-	if need&permExec != 0 && !mode.CanExecute(permClass) {
+	if need&PermExec != 0 && !mode.CanExecute(class) {
 		return ErrPermission
 	}
 	return nil
 }
 
-// checkOwnership gates the metadata-changing operations (chmod, chown):
-// only the file's owner may change them. That is Unix EPERM — a different
-// error from the EACCES that checkPerm returns.
-func (f *VFS) checkOwnership(n *Inode) error {
-	if n == nil {
-		return ErrNotExist
-	}
-	if f.id.IsRoot() {
+func CheckOwnership(owner Ownership, actor user.Identity) error {
+	if actor.IsRoot() {
 		return nil
 	}
-	if n.Owner().User != f.id.Name {
+	if owner.User != actor.Name {
 		return ErrNotOwner
 	}
 	return nil

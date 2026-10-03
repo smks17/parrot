@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
-	"parrot/internal/engine/vfs"
 	"slices"
 	"strings"
 	"time"
@@ -27,10 +27,10 @@ type HistoryEntry struct {
 
 type Context struct {
 	Ctx context.Context
-	VFS *vfs.VFS
+	VFS filesystem.FS
 
 	// Fds is the process's descriptor table. Stdin, Stdout and Stderr
-	Fds *vfs.FDTable
+	Fds *filesystem.FDTable
 
 	Stdin   io.Reader
 	Stdout  io.Writer

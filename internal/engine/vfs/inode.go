@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"parrot/internal/engine/clock"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
 
@@ -36,10 +37,7 @@ func reserveIno(used Ino) {
 	}
 }
 
-type Ownership struct {
-	User  string
-	Group string
-}
+type Ownership = filesystem.Ownership
 
 func OwnedBy(id user.Identity) Ownership {
 	return Ownership{User: id.Name, Group: id.Primary()}
@@ -52,7 +50,7 @@ type Inode struct {
 	ino Ino
 
 	mu      sync.RWMutex
-	mode    FileMode // the type bits and the nine permission bits
+	mode    filesystem.FileMode // the type bits and the nine permission bits
 	owner   Ownership
 	mtime   time.Time
 	nlink   int
@@ -69,7 +67,7 @@ type Dirent struct {
 func NewFile(content []byte, owner Ownership) *Inode {
 	return &Inode{
 		ino:     allocIno(),
-		mode:    DefaultFileMode,
+		mode:    filesystem.DefaultFileMode,
 		owner:   owner,
 		mtime:   clock.Now(),
 		content: content,
@@ -79,7 +77,7 @@ func NewFile(content []byte, owner Ownership) *Inode {
 func NewDir(owner Ownership) *Inode {
 	dir := &Inode{
 		ino:     allocIno(),
-		mode:    DefaultDirMode,
+		mode:    filesystem.DefaultDirMode,
 		owner:   owner,
 		mtime:   clock.Now(),
 		entries: map[string]*Inode{},
@@ -122,7 +120,7 @@ func (node *Inode) lock(do func()) {
 	do()
 }
 
-func (node *Inode) Mode() FileMode {
+func (node *Inode) Mode() filesystem.FileMode {
 	node.mu.RLock()
 	defer node.mu.RUnlock()
 	return node.mode
@@ -136,7 +134,7 @@ func (node *Inode) Owner() Ownership {
 	return node.owner
 }
 
-func (node *Inode) meta() (Ownership, FileMode) {
+func (node *Inode) meta() (Ownership, filesystem.FileMode) {
 	node.mu.RLock()
 	defer node.mu.RUnlock()
 	return node.owner, node.mode
@@ -161,14 +159,14 @@ func (node *Inode) Touch() {
 // touch is Touch for a caller already holding the lock.
 func (node *Inode) touch() { node.mtime = clock.Now() }
 
-func (node *Inode) setOwner(owner Ownership, mode FileMode) *Inode {
+func (node *Inode) setOwner(owner Ownership, mode filesystem.FileMode) *Inode {
 	node.lock(func() { node.owner, node.mode = owner, mode })
 	return node
 }
 
-func (node *Inode) setPerm(mode FileMode) {
+func (node *Inode) setPerm(mode filesystem.FileMode) {
 	node.lock(func() {
-		node.mode &= ^FileMode(0777)
+		node.mode &= ^filesystem.FileMode(0777)
 		node.mode |= mode & 0777
 	})
 }
@@ -285,20 +283,20 @@ func (node *Inode) NumEntries() int {
 
 func (dir *Inode) Link(name string, child *Inode) error {
 	if name == currDir || name == preDir {
-		return ErrExists
+		return filesystem.ErrExists
 	}
 	if dir == child {
-		return ErrInvalid // a directory cannot be its own entry
+		return filesystem.ErrInvalid // a directory cannot be its own entry
 	}
 
 	unlock := lockPair(dir, child)
 	defer unlock()
 
 	if !dir.mode.IsDirectory() {
-		return ErrNotDir
+		return filesystem.ErrNotDir
 	}
 	if _, exists := dir.entries[name]; exists {
-		return ErrExists
+		return filesystem.ErrExists
 	}
 
 	dir.entries[name] = child
@@ -315,7 +313,7 @@ func (dir *Inode) Link(name string, child *Inode) error {
 func (dir *Inode) Unlink(name string) error {
 	child, ok := dir.Lookup(name)
 	if !ok || name == currDir || name == preDir {
-		return ErrNotExist
+		return filesystem.ErrNotExist
 	}
 
 	unlock := lockPair(dir, child)
@@ -323,7 +321,7 @@ func (dir *Inode) Unlink(name string) error {
 
 	// Re-check: the entry may have gone or been replaced while we had no lock.
 	if current, ok := dir.entries[name]; !ok || current != child {
-		return ErrNotExist
+		return filesystem.ErrNotExist
 	}
 
 	delete(dir.entries, name)

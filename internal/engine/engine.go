@@ -9,6 +9,7 @@ import (
 
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
@@ -29,6 +30,17 @@ func (app *App) SetYield(tick func()) {
 	app.session.shell.SetYield(tick)
 }
 
+// NewAppOn starts a shell on a filesystem of your choosing
+func NewAppOn(fsys filesystem.FS) *App {
+	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
+	session.shell.SwitchUser = session.SwitchUser
+	id := fsys.Identity()
+	vars := session.shell.Vars()
+	vars[commands.EnvUser] = id.Name
+	vars[commands.EnvHome] = id.Home
+	return &App{session: session}
+}
+
 func (app *App) Snapshot() ([]byte, error) {
 	return app.session.Snapshot()
 }
@@ -45,7 +57,7 @@ func (app *App) Restore(data []byte) error {
 
 // Session is one shell and the filesystem it runs on.
 type Session struct {
-	fs    *vfs.VFS
+	fs    filesystem.FS
 	shell *shell.Shell
 }
 
@@ -61,12 +73,21 @@ func newSession(filesystem *vfs.VFS) *Session {
 	return s
 }
 
+func (s *Session) tree() (*vfs.VFS, bool) {
+	tree, inMemory := s.fs.(*vfs.VFS)
+	return tree, inMemory
+}
+
 func (s *Session) SetUser(name string) error {
-	id, err := s.fs.UsersDB().Lookup(name)
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
+	id, err := tree.UsersDB().Lookup(name)
 	if err != nil {
 		return err
 	}
-	s.fs.SetIdentity(id)
+	tree.SetIdentity(id)
 	vars := s.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
@@ -76,7 +97,11 @@ func (s *Session) SetUser(name string) error {
 func (app *App) Login(name, password string) error { return app.session.Login(name, password) }
 
 func (s *Session) Login(name, password string) error {
-	if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
+	if err := tree.UsersDB().Authenticate(name, password); err != nil {
 		return err
 	}
 	if err := s.SetUser(name); err != nil {
@@ -89,8 +114,12 @@ func (s *Session) Login(name, password string) error {
 }
 
 func (s *Session) SwitchUser(name, password string) error {
+	tree, inMemory := s.tree()
+	if !inMemory {
+		return ErrRealFilesystem
+	}
 	if !s.fs.Identity().IsRoot() {
-		if err := s.fs.UsersDB().Authenticate(name, password); err != nil {
+		if err := tree.UsersDB().Authenticate(name, password); err != nil {
 			return err
 		}
 	}
@@ -172,7 +201,7 @@ func (s *Session) runStream(ctx context.Context, src string, out, errOut io.Writ
 	s.shell.SetContext(ctx)
 	defer s.shell.SetContext(context.Background())
 
-	status := s.shell.Run(src, vfs.NewStdTable(strings.NewReader(""), outW, errW))
+	status := s.shell.Run(src, filesystem.NewStdTable(strings.NewReader(""), outW, errW))
 	code, exited := s.shell.Exiting()
 	if exited {
 		status = code

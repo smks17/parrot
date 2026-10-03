@@ -1,4 +1,4 @@
-package vfs
+package filesystem
 
 import (
 	"errors"
@@ -21,18 +21,29 @@ const (
 	accessMask OpenFlags = 0x3
 )
 
-func (flags OpenFlags) readable() bool {
+func (flags OpenFlags) Readable() bool {
 	return flags&accessMask == O_RDONLY || flags&accessMask == O_RDWR
 }
 
-func (flags OpenFlags) writable() bool {
+func (flags OpenFlags) Writable() bool {
 	return flags&accessMask == O_WRONLY || flags&accessMask == O_RDWR
+}
+
+// Store is the file a description reads and writes through: an inode in the
+// in-memory tree. A stream has none.
+type Store interface {
+	ReadAt(p []byte, off int64) int
+	WriteAt(p []byte, off int64) int
+	Append(content []byte)
+	Truncate(size int64)
+	Size() int64
+	IsDir() bool
 }
 
 // An open file description
 type File struct {
 	mu     sync.Mutex
-	inode  *Inode
+	inode  Store
 	offset int64
 	flags  OpenFlags
 	closed bool
@@ -44,6 +55,12 @@ type File struct {
 
 func NewStreamFile(r io.Reader, w io.Writer) *File {
 	return &File{reader: r, writer: w, flags: O_RDWR}
+}
+
+// NewHostFile is a description over a descriptor the machine opened, which is
+// how a filesystem made of real files answers Open.
+func NewHostFile(f io.ReadWriteCloser, flags OpenFlags) *File {
+	return &File{reader: f, writer: f, closer: f, flags: flags}
 }
 
 // a one-way channel joining two file descriptions.
@@ -64,7 +81,7 @@ func (f *File) Read(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.closed || !f.flags.readable() {
+	if f.closed || !f.flags.Readable() {
 		return 0, ErrBadFD
 	}
 	if f.reader != nil {
@@ -86,7 +103,7 @@ func (f *File) Write(p []byte) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if f.closed || !f.flags.writable() {
+	if f.closed || !f.flags.Writable() {
 		return 0, ErrBadFD
 	}
 	if f.writer != nil {
@@ -127,12 +144,12 @@ func (f *File) Close() error {
 	return nil
 }
 
-func OpenFile(node *Inode, flags OpenFlags) (*File, error) {
+func OpenFile(node Store, flags OpenFlags) (*File, error) {
 	if node.IsDir() {
 		return nil, ErrIsDir // a directory is read with List, not with read(2)
 	}
 
-	if flags&O_TRUNC != 0 && flags.writable() {
+	if flags&O_TRUNC != 0 && flags.Writable() {
 		node.Truncate(0)
 	}
 	file := &File{inode: node, flags: flags}

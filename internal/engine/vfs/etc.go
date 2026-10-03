@@ -3,13 +3,14 @@ package vfs
 import (
 	"path"
 
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
 
 func seedEtc(root *Inode) {
 	files := []struct {
 		name, content string
-		mode          FileMode
+		mode          filesystem.FileMode
 	}{
 		{path.Base(user.PasswdPath), user.DefaultPasswd, 0644},
 		{path.Base(user.GroupPath), user.DefaultGroup, 0644},

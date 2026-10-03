@@ -1,15 +1,19 @@
 package vfs
 
-import "time"
+import (
+	"time"
+
+	"parrot/internal/engine/filesystem"
+)
 
 type DumpNode struct {
 	Name     string      `json:"name"`
 	Content  []byte      `json:"content,omitempty"`
 	Children []*DumpNode `json:"children,omitempty"`
 
-	Mode  *FileMode `json:"mode,omitempty"`
-	Owner string    `json:"owner,omitempty"`
-	Group string    `json:"group,omitempty"`
+	Mode  *filesystem.FileMode `json:"mode,omitempty"`
+	Owner string               `json:"owner,omitempty"`
+	Group string               `json:"group,omitempty"`
 
 	// Mtime is Unix seconds.
 	Mtime int64 `json:"mtime,omitempty"`
@@ -55,7 +59,7 @@ func (d *DumpNode) toInode(byIno map[uint64]*Inode, isRoot bool) *Inode {
 
 	owner := Ownership{User: d.Owner, Group: d.Group}
 
-	mode, known := DefaultFileMode, false
+	mode, known := filesystem.DefaultFileMode, false
 	if d.Mode != nil {
 		mode, known = *d.Mode, true
 	}

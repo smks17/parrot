@@ -11,8 +11,8 @@ import (
 	"sync"
 
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
-	"parrot/internal/engine/vfs"
 )
 
 // TODO: Configuring
@@ -23,7 +23,7 @@ const (
 
 // Shell is one running shell: a filesystem, and the state kept between commands.
 type Shell struct {
-	fs      *vfs.VFS
+	fs      filesystem.FS
 	vars    map[string]string
 	funcs   map[string]*List
 	params  []string // the arguments a script was given, $1 onwards
@@ -41,6 +41,11 @@ type Shell struct {
 
 	user       user.Identity
 	SwitchUser func(name, password string) error
+
+	// Fallback is asked for a command the shell does not have. It is how a
+	// shell on the real filesystem reaches the programs installed on the
+	// machine; the browser leaves it nil and has none.
+	Fallback func(name string) (commands.Command, bool)
 }
 
 type control int
@@ -54,7 +59,7 @@ const (
 	interrupting
 )
 
-func New(fs *vfs.VFS, switchUser func(name, password string) error) *Shell {
+func New(fs filesystem.FS, switchUser func(name, password string) error) *Shell {
 	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser, ctx: context.Background()}
 }
 
@@ -102,7 +107,7 @@ func (sh *Shell) Exiting() (int, bool) {
 }
 
 // Run parses and runs source text, returning the status of the last command.
-func (sh *Shell) Run(src string, fds *vfs.FDTable) int {
+func (sh *Shell) Run(src string, fds *filesystem.FDTable) int {
 	list, err := Parse(src)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -115,7 +120,7 @@ func (sh *Shell) Run(src string, fds *vfs.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runList(list *List, fds *vfs.FDTable) int {
+func (sh *Shell) runList(list *List, fds *filesystem.FDTable) int {
 	status := 0
 	for _, cmd := range list.Cmds {
 		if sh.interrupted() {
@@ -129,7 +134,7 @@ func (sh *Shell) runList(list *List, fds *vfs.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runCmd(cmd Cmd, fds *vfs.FDTable) int {
+func (sh *Shell) runCmd(cmd Cmd, fds *filesystem.FDTable) int {
 	switch c := cmd.(type) {
 	case *List:
 		return sh.runList(c, fds)
@@ -153,7 +158,7 @@ func (sh *Shell) runCmd(cmd Cmd, fds *vfs.FDTable) int {
 	return sh.fail(fds, fmt.Errorf("cannot run %T", cmd))
 }
 
-func (sh *Shell) runAndOr(cmd *AndOr, fds *vfs.FDTable) int {
+func (sh *Shell) runAndOr(cmd *AndOr, fds *filesystem.FDTable) int {
 	status := sh.runCmd(cmd.Left, fds)
 	if sh.control != running {
 		return status
@@ -165,7 +170,7 @@ func (sh *Shell) runAndOr(cmd *AndOr, fds *vfs.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runIf(cmd *If, fds *vfs.FDTable) int {
+func (sh *Shell) runIf(cmd *If, fds *filesystem.FDTable) int {
 	if sh.runList(cmd.Cond, fds) == 0 {
 		return sh.runList(cmd.Then, fds)
 	}
@@ -175,7 +180,7 @@ func (sh *Shell) runIf(cmd *If, fds *vfs.FDTable) int {
 	return sh.setStatus(0)
 }
 
-func (sh *Shell) runLoop(loop *Loop, fds *vfs.FDTable) int {
+func (sh *Shell) runLoop(loop *Loop, fds *filesystem.FDTable) int {
 	status := 0
 	for turn := 0; turn < maxLoops; turn++ {
 		if sh.interrupted() {
@@ -196,7 +201,7 @@ func (sh *Shell) runLoop(loop *Loop, fds *vfs.FDTable) int {
 	return sh.fail(fds, fmt.Errorf("loop ran too long")) // TODO: create error object
 }
 
-func (sh *Shell) runFor(cmd *For, fds *vfs.FDTable) int {
+func (sh *Shell) runFor(cmd *For, fds *filesystem.FDTable) int {
 	items, err := sh.expandWords(cmd.Items, fds)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -230,7 +235,7 @@ func (sh *Shell) stopLoop() bool {
 	return true
 }
 
-func (sh *Shell) runSimple(cmd *Simple, fds *vfs.FDTable) int {
+func (sh *Shell) runSimple(cmd *Simple, fds *filesystem.FDTable) int {
 	args, err := sh.expandWords(cmd.Words, fds)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -258,7 +263,7 @@ func (sh *Shell) runSimple(cmd *Simple, fds *vfs.FDTable) int {
 // before it writes through an io.Pipe. A pipe holds no buffer, so a fast
 // producer waits for its reader instead of growing memory, and "cat file |
 // wc" starts counting before cat is done.
-func (sh *Shell) runPipeline(pipeline *Pipeline, fds *vfs.FDTable) int {
+func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
 	if len(pipeline.Cmds) == 1 {
 		return sh.runCmd(pipeline.Cmds[0], fds)
 	}
@@ -268,20 +273,20 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *vfs.FDTable) int {
 	statuses := make([]int, len(pipeline.Cmds))
 
 	// read is the previous stage
-	var read *vfs.File
+	var read *filesystem.File
 
 	for i, cmd := range pipeline.Cmds {
 		stage := fds.Clone()
 
-		var localFdTable vfs.FDTable
+		var localFdTable filesystem.FDTable
 		if read != nil {
-			stage.Set(vfs.Stdin, read)
+			stage.Set(filesystem.Stdin, read)
 			localFdTable.Alloc(read)
 		}
 		if i < last {
-			var write *vfs.File
-			read, write = vfs.Pipe()
-			stage.Set(vfs.Stdout, write)
+			var write *filesystem.File
+			read, write = filesystem.Pipe()
+			stage.Set(filesystem.Stdout, write)
 			localFdTable.Alloc(write)
 		}
 
@@ -314,7 +319,7 @@ func (sh *Shell) sub() *Shell {
 	return &child
 }
 
-func (sh *Shell) runCommand(args []string, fds *vfs.FDTable) int {
+func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
 	name, rest := args[0], args[1:]
 
 	if body, ok := sh.funcs[name]; ok {
@@ -326,13 +331,18 @@ func (sh *Shell) runCommand(args []string, fds *vfs.FDTable) int {
 	if cmd, ok := commands.Lookup(name); ok {
 		return cmd.Run(sh.context(fds), rest)
 	}
+	if sh.Fallback != nil {
+		if cmd, ok := sh.Fallback(name); ok {
+			return cmd.Run(sh.context(fds), rest)
+		}
+	}
 
 	fmt.Fprintf(fds.Stderr(), "prt: %s: command not found\n", name)
 	return 127
 }
 
 // context is what the commands package expects to be handed.
-func (sh *Shell) context(fds *vfs.FDTable) *commands.Context {
+func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
 	return &commands.Context{
 		Ctx:        sh.ctx,
 		VFS:        sh.fs,
@@ -347,12 +357,12 @@ func (sh *Shell) context(fds *vfs.FDTable) *commands.Context {
 	}
 }
 
-func (sh *Shell) callFunc(body *List, args []string, fds *vfs.FDTable) int {
+func (sh *Shell) callFunc(body *List, args []string, fds *filesystem.FDTable) int {
 	log.Fatal("Not implemented") // TODO
 	return 0
 }
 
-func (sh *Shell) redirect(redirs []Redirect, fds *vfs.FDTable) (*vfs.FDTable, error) {
+func (sh *Shell) redirect(redirs []Redirect, fds *filesystem.FDTable) (*filesystem.FDTable, error) {
 	if len(redirs) == 0 {
 		return fds, nil
 	}
@@ -360,14 +370,14 @@ func (sh *Shell) redirect(redirs []Redirect, fds *vfs.FDTable) (*vfs.FDTable, er
 
 	for _, redirect := range redirs {
 		if redirect.Op == "2>&1" {
-			err := fds.Dup(vfs.Stdout, vfs.Stderr)
+			err := fds.Dup(filesystem.Stdout, filesystem.Stderr)
 			if err != nil {
 				return fds, err
 			}
 			continue
 		}
 		if redirect.Op == ">&2" {
-			err := fds.Dup(vfs.Stderr, vfs.Stdout)
+			err := fds.Dup(filesystem.Stderr, filesystem.Stdout)
 			if err != nil {
 				return fds, err
 			}
@@ -380,25 +390,25 @@ func (sh *Shell) redirect(redirs []Redirect, fds *vfs.FDTable) (*vfs.FDTable, er
 		}
 
 		if redirect.Op == "<" {
-			file, err := sh.fs.Open(name, vfs.O_RDONLY)
+			file, err := sh.fs.Open(name, filesystem.O_RDONLY)
 			if err != nil {
 				return fds, fmt.Errorf("%s: %v", name, err)
 			}
-			fds.Set(vfs.Stdin, file)
+			fds.Set(filesystem.Stdin, file)
 			continue
 		}
 
-		flags := vfs.O_WRONLY | vfs.O_CREATE | vfs.O_TRUNC
+		flags := filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_TRUNC
 		if strings.HasSuffix(redirect.Op, ">>") {
-			flags = vfs.O_WRONLY | vfs.O_CREATE | vfs.O_APPEND
+			flags = filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_APPEND
 		}
 		file, err := sh.fs.Open(name, flags)
 		if err != nil {
 			return fds, fmt.Errorf("%s: %v", name, err)
 		}
-		fd := vfs.Stdout
+		fd := filesystem.Stdout
 		if strings.HasPrefix(redirect.Op, "2") {
-			fd = vfs.Stderr
+			fd = filesystem.Stderr
 		}
 		fds.Set(fd, file)
 	}
@@ -410,7 +420,7 @@ func (sh *Shell) setStatus(status int) int {
 	return status
 }
 
-func (sh *Shell) builtin(name string, args []string, fds *vfs.FDTable) (int, bool) {
+func (sh *Shell) builtin(name string, args []string, fds *filesystem.FDTable) (int, bool) {
 	switch name {
 	case ":":
 		return 0, true
@@ -464,7 +474,7 @@ func exitStatus(args []string, fallback int) int {
 	return status
 }
 
-func (sh *Shell) source(args []string, fds *vfs.FDTable) int {
+func (sh *Shell) source(args []string, fds *filesystem.FDTable) int {
 	if len(args) == 0 {
 		fmt.Fprintln(fds.Stderr(), "prt: source: no file given")
 		return 2
@@ -493,7 +503,7 @@ func (sh *Shell) source(args []string, fds *vfs.FDTable) int {
 
 // test is the "test" builtin, which is also written "[ ... ]". It is what
 // gives "if" and "while" something to ask about.
-func (sh *Shell) test(args []string, fds *vfs.FDTable) int {
+func (sh *Shell) test(args []string, fds *filesystem.FDTable) int {
 	if len(args) > 0 && args[len(args)-1] == "]" {
 		args = args[:len(args)-1] // the closing bracket is not an argument
 	}
@@ -534,17 +544,17 @@ func (sh *Shell) testOne(op, operand string) (bool, error) {
 		return operand != "", nil
 	}
 
-	node, err := sh.fs.Resolve(operand)
+	entry, err := sh.fs.Stat(operand)
 	exists := err == nil
 	switch op {
 	case "-e":
 		return exists, nil
 	case "-f":
-		return exists && !node.IsDir(), nil
+		return exists && !entry.IsDir(), nil
 	case "-d":
-		return exists && node.IsDir(), nil
+		return exists && entry.IsDir(), nil
 	case "-s":
-		return exists && len(node.Bytes()) > 0, nil
+		return exists && entry.Size > 0, nil
 	}
 	return false, fmt.Errorf("unknown check %q", op)
 }
@@ -583,7 +593,7 @@ func (sh *Shell) testTwo(left, op, right string) (bool, error) {
 	return false, fmt.Errorf("unknown comparison %q", op)
 }
 
-func (sh *Shell) fail(fds *vfs.FDTable, err error) int {
+func (sh *Shell) fail(fds *filesystem.FDTable, err error) int {
 	fmt.Fprintf(fds.Stderr(), "prt: %v\n", err)
 	return sh.setStatus(2)
 }

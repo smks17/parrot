@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"parrot/internal/engine/clock"
-	"parrot/internal/engine/vfs"
+	"parrot/internal/engine/filesystem"
 )
 
 type Ls struct{}
@@ -61,10 +61,10 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 	// "." and ".." are real entries, so -a shows them the way it shows any
 	// other name rather than by inventing two rows.
 	if all {
-		if dir, err := ctx.VFS.Resolve(path); err == nil && dir.IsDir() {
-			rows = append(rows, lsRow{node: dir, name: "."})
-			if parent, ok := dir.Lookup(".."); ok {
-				rows = append(rows, lsRow{node: parent, name: ".."})
+		if dir, err := ctx.VFS.Stat(path); err == nil && dir.IsDir() {
+			rows = append(rows, lsRow{info: dir, name: "."})
+			if parent, err := ctx.VFS.Stat(path + "/.."); err == nil {
+				rows = append(rows, lsRow{info: parent, name: ".."})
 			}
 		}
 	}
@@ -72,13 +72,13 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 		if !all && strings.HasPrefix(entry.Name, ".") {
 			continue
 		}
-		rows = append(rows, lsRow{node: entry.Inode, name: entry.Name})
+		rows = append(rows, lsRow{info: entry, name: entry.Name})
 	}
 
 	if !long {
 		for _, row := range rows {
 			if inum {
-				fmt.Fprintf(ctx.Stdout, "%d %s\n", row.node.Ino(), row.name)
+				fmt.Fprintf(ctx.Stdout, "%d %s\n", row.info.Ino, row.name)
 				continue
 			}
 			fmt.Fprintln(ctx.Stdout, row.name)
@@ -97,11 +97,10 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 	now := clock.Now()
 	for _, row := range rows {
 		if inum {
-			fmt.Fprintf(tw, "%d\t", row.node.Ino())
+			fmt.Fprintf(tw, "%d\t", row.info.Ino)
 		}
-		owner := row.node.Owner()
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.node.Mode(), row.links(), owner.User, owner.Group,
+			row.info.Mode, row.links(), row.info.Owner.Name, row.info.Owner.Primary(),
 			fmt.Sprintf("%*s", width, row.size()), row.modTime(now), row.name)
 	}
 	tw.Flush()
@@ -109,17 +108,14 @@ func (ls Ls) Run(ctx *Context, args []string) int {
 }
 
 type lsRow struct {
-	node *vfs.Inode
+	info filesystem.Info
 	name string
 }
 
-// links is the inode's link count, which the filesystem now keeps: for a
-// directory that is its own ".", its parent's entry for it, and one ".." per
-// subdirectory.
-func (r lsRow) links() string { return strconv.Itoa(r.node.Nlink()) }
+func (r lsRow) links() string { return strconv.Itoa(r.info.Links) }
 
 func (r lsRow) modTime(now time.Time) string {
-	t := r.node.ModTime().In(now.Location())
+	t := r.info.ModTime.In(now.Location())
 	if t.After(now.AddDate(0, -6, 0)) && t.Before(now.Add(time.Hour)) {
 		return t.Format("Jan _2 15:04")
 	}
@@ -127,10 +123,10 @@ func (r lsRow) modTime(now time.Time) string {
 }
 
 func (r lsRow) size() string {
-	if r.node.IsDir() {
+	if r.info.IsDir() {
 		return "-"
 	}
-	return strconv.FormatInt(r.node.Size(), 10)
+	return strconv.FormatInt(r.info.Size, 10)
 }
 
 func init() { Register(Ls{}) }
