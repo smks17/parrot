@@ -61,3 +61,12 @@ func (f *FS) Chdir(path string) error {
 	f.cwd = target
 	return nil
 }
+
+func (f *FS) Link(oldpath, newpath string) error {
+	old := f.resolve(oldpath)
+	new := f.resolve(newpath)
+	if err := os.Link(old, new); err != nil {
+		return translate(err)
+	}
+	return nil
+}
