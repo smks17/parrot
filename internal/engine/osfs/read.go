@@ -55,6 +55,44 @@ func (f *FS) Walk(path string, do func(filesystem.Info) error) error {
 	})
 }
 
+func (f *FS) OpenDefault(path string) (*filesystem.File, error) {
+	return f.Open(path, filesystem.O_RDONLY)
+}
+
+func (f *FS) Open(path string, flags filesystem.OpenFlags) (*filesystem.File, error) {
+	target := f.resolve(path)
+
+	// A directory is read with List, not with read(2), as in the in-memory tree.
+	if stat, err := os.Stat(target); err == nil && stat.IsDir() {
+		return nil, filesystem.ErrIsDir
+	}
+
+	var host int
+	switch {
+	case flags.Readable() && flags.Writable():
+		host = os.O_RDWR
+	case flags.Writable():
+		host = os.O_WRONLY
+	default:
+		host = os.O_RDONLY
+	}
+	if flags&filesystem.O_CREATE != 0 {
+		host |= os.O_CREATE
+	}
+	if flags&filesystem.O_TRUNC != 0 && flags.Writable() {
+		host |= os.O_TRUNC
+	}
+	if flags&filesystem.O_APPEND != 0 {
+		host |= os.O_APPEND
+	}
+
+	file, err := os.OpenFile(target, host, os.FileMode(filesystem.DefaultFileMode))
+	if err != nil {
+		return nil, translate(err)
+	}
+	return filesystem.NewHostFile(file, flags), nil
+}
+
 func (f *FS) Read(path string) ([]byte, error) {
 	content, err := os.ReadFile(f.resolve(path))
 	if err != nil {
