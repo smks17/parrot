@@ -1,11 +1,10 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 
-	"parrot/internal/engine/vfs"
+	"parrot/internal/engine/filesystem"
 )
 
 type Chmod struct{}
@@ -47,35 +46,28 @@ func (c Chmod) Run(ctx *Context, args []string) int {
 		return 0
 	}
 
-	node, err := ctx.VFS.Resolve(path)
-	if err != nil {
-		fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", c.Name(), path, err)
-		return 1
-	}
-
-	exit := 0
-	var changeMod func(n *vfs.Node) error
-	changeMod = func(n *vfs.Node) error {
-		err := ctx.VFS.ChmodNode(n, mode)
-		if err != nil {
-			return errors.New(fmt.Sprintf("%s: %s: %v\n", c.Name(), n.Path(), err))
+	// -R walks the tree and changes each entry by path, which is all a
+	// filesystem has to offer in common — the in-memory one has nodes, the
+	// real one does not.
+	err = ctx.VFS.Walk(path, func(entry filesystem.Info) error {
+		if err := ctx.VFS.Chmod(entry.Path, mode); err != nil {
+			return fmt.Errorf("%s: %s: %v", c.Name(), entry.Path, err)
 		}
 		return nil
-	}
-	err = node.Walk(changeMod)
+	})
 	if err != nil {
-		fmt.Fprintf(ctx.Stderr, err.Error())
-		exit = 1
+		fmt.Fprintln(ctx.Stderr, err)
+		return 1
 	}
-	return exit
+	return 0
 }
 
-func parseMode(s string) (vfs.FileMode, error) {
+func parseMode(s string) (filesystem.FileMode, error) {
 	v, err := strconv.ParseUint(s, 8, 32)
 	if err != nil || v > 0777 {
 		return 0, fmt.Errorf("invalid mode")
 	}
-	return vfs.FileMode(v), nil
+	return filesystem.FileMode(v), nil
 }
 
 func init() { Register(Chmod{}) }

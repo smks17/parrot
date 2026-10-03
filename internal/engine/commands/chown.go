@@ -20,7 +20,6 @@ func (c Chown) Run(ctx *Context, args []string) int {
 	}
 	spec, path := args[0], args[1]
 
-	// TODO: check user, group
 	owner, group, ok := parseOwnerSpec(spec)
 	if !ok {
 		fmt.Fprintf(ctx.Stderr, "%s: invalid user spec: '%s'\n", c.Name(), spec)

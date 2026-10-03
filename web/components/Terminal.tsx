@@ -8,10 +8,16 @@ import styles from "./Terminal.module.css";
 const MAX_ENTRIES = 500;
 
 interface Entry {
+  at: string;
+  user: string;
   cwd: string;
   line: string;
   stdout: string;
   stderr: string;
+}
+
+function promptFor(user: string, cwd: string) {
+  return `${user}:${cwd} ${user === "root" ? "#" : "$"}`;
 }
 
 export default function Terminal() {
@@ -24,6 +30,7 @@ export default function Terminal() {
   // sync with a Go-side rename without breaking anything, just looking wrong
   // for one frame.
   const [cwd, setCwd] = useState("/home/mahdi")
+  const [user, setUser] = useState("mahdi")
 
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
@@ -43,7 +50,9 @@ export default function Terminal() {
           try {
             const bytes = await fetchSession(sessionId);
             loadSession(bytes);
-            setCwd(execute("pwd").stdout.trim());
+            const res = execute("pwd");
+            setCwd(res.stdout.trim());
+            setUser(res.user);
           } catch {
             // Bad or missing link: fall back to the fresh session already
             // running rather than blocking the terminal from loading.
@@ -71,10 +80,11 @@ export default function Terminal() {
 
   function runLine(line: string) {
     const res = execute(line);
-    setEntries((prev) =>
-      [...prev, { cwd, line, stdout: res.stdout, stderr: res.stderr }].slice(-MAX_ENTRIES)
-    );
+    // The entry keeps the prompt the line was typed at, so a `su` shows up
+    // on the next line rather than rewriting its own.
+    setEntries((prev) => [...prev, { at: res.at, user, cwd, line, stdout: res.stdout, stderr: res.stderr }].slice(-MAX_ENTRIES));
     setCwd(res.cwd);
+    setUser(res.user);
     setHistory((prev) => [...prev, line]);
     setHistoryIndex(null);
   }
@@ -165,19 +175,20 @@ export default function Terminal() {
       })
     );
 
-    setEntries((prev) =>
-      [
-        ...prev,
-        ...results.map(({ file, res }) => ({
-          cwd,
-          line: `upload ${file.name}`,
-          stdout: res.stdout,
-          stderr: res.stderr,
-        })),
-      ].slice(-MAX_ENTRIES)
-    );
+    setEntries((prev) => [
+      ...prev,
+      ...results.map(({ file, res }) => ({
+        at: res.at,
+        user,
+        cwd,
+        line: `upload ${file.name}`,
+        stdout: res.stdout,
+        stderr: res.stderr,
+      })),
+    ].slice(-MAX_ENTRIES));
     if (results.length > 0) {
       setCwd(results[results.length - 1].res.cwd);
+      setUser(results[results.length - 1].res.user);
     }
   }
 
@@ -202,7 +213,8 @@ export default function Terminal() {
         {entries.map((entry, i) => (
           <div key={i} className={styles.entry}>
             <div className={styles.promptLine}>
-              <span className={styles.prompt}>{entry.cwd} $</span>{" "}
+              {entry.at && <span className={styles.stamp}>[{entry.at}]</span>}
+              <span className={styles.prompt}>{promptFor(entry.user, entry.cwd)}</span>{" "}
               <span>{entry.line}</span>
             </div>
             {entry.stdout && <pre className={styles.stdout}>{entry.stdout}</pre>}
@@ -210,7 +222,7 @@ export default function Terminal() {
           </div>
         ))}
         <div className={styles.promptLine}>
-          <span className={styles.prompt}>{cwd} $</span>
+          <span className={styles.prompt}>{promptFor(user, cwd)}</span>
           <input
             ref={inputRef}
             className={styles.input}

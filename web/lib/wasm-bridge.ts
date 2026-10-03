@@ -3,6 +3,8 @@ export interface ExecResult {
   stderr: string;
   exitCode: number;
   cwd: string;
+  user: string;
+  at: string; // the shell's clock when the line ran, "15:04:05"
 }
 
 declare global {

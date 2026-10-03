@@ -101,3 +101,8 @@
     line-height: 1.4;
   }
 }
+
+.stamp {
+  color: var(--dim);
+  flex-shrink: 0;
+}

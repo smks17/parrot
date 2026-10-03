@@ -8,29 +8,44 @@ import (
 	"syscall/js"
 )
 
+// reply is the shape the browser reads every command through.
+func reply(r engine.Result) map[string]any {
+	return map[string]any{
+		"stdout":   r.Stdout,
+		"stderr":   r.Stderr,
+		"exitCode": r.ExitCode,
+		"cwd":      r.Cwd,
+		"user":     r.User,
+		"at":       r.At,
+	}
+}
+
+// fail is the same shape for what never reached the engine.
+func fail(app *engine.App, message string) map[string]any {
+	return reply(engine.Result{Stderr: message, ExitCode: 2, Cwd: app.Cwd(), User: app.User(), At: app.Now()})
+}
+
 func main() {
 	js.Global().Set("__engineReady", js.ValueOf(true))
 	var app = engine.NewApp()
+	// TODO(stream-io): the engine can already stream output and be cancelled,
+	// but nothing here uses it yet. To connect it:
+	//   - app.SetYield with a function that parks on a MessageChannel, so a
+	//     loop that never blocks still lets the page deliver a keypress.
+	//   - execute returns a Promise and takes an onChunk callback, calling
+	//     app.ExecuteStream on a goroutine instead of the blocking app.Execute.
+	//   - an interrupt() global that cancels the context ExecuteStream was given.
+	//   - Terminal.tsx and wasm-bridge.ts change with it: they move together.
 	js.Global().Set("execute", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 1 || args[0].Type() != js.TypeString {
-			return map[string]any{"stdout": "", "stderr": "execute: expected a string",
-				"exitCode": 2, "cwd": app.Cwd()}
+			return fail(app, "execute: expected a string")
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				result = map[string]any{
-					"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd(),
-				}
+				result = fail(app, fmt.Sprintf("internal error: %v", r))
 			}
 		}()
-		r := app.Execute(args[0].String())
-		return map[string]any{
-			"stdout":   r.Stdout,
-			"stderr":   r.Stderr,
-			"exitCode": r.ExitCode,
-			"cwd":      r.Cwd,
-		}
+		return reply(app.Execute(args[0].String()))
 	}))
 
 	js.Global().Set("complete", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
@@ -52,19 +67,16 @@ func main() {
 
 	js.Global().Set("upload", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
 		if len(args) < 2 || args[0].Type() != js.TypeString {
-			return map[string]any{"stdout": "", "stderr": "upload: expected a path and bytes",
-				"exitCode": 2, "cwd": app.Cwd()}
+			return fail(app, "upload: expected a path and bytes")
 		}
 		defer func() {
 			if r := recover(); r != nil {
-				result = map[string]any{"stdout": "", "stderr": fmt.Sprintf("internal error: %v", r),
-					"exitCode": 2, "cwd": app.Cwd()}
+				result = fail(app, fmt.Sprintf("internal error: %v", r))
 			}
 		}()
 		data := make([]byte, args[1].Get("length").Int())
 		js.CopyBytesToGo(data, args[1])
-		r := app.Upload(args[0].String(), data)
-		return map[string]any{"stdout": r.Stdout, "stderr": r.Stderr, "exitCode": r.ExitCode, "cwd": r.Cwd}
+		return reply(app.Upload(args[0].String(), data))
 	}))
 
 	js.Global().Set("snapshot", js.FuncOf(func(this js.Value, args []js.Value) (result any) {
@@ -93,10 +105,7 @@ func main() {
 		}()
 		data := make([]byte, args[0].Get("length").Int())
 		js.CopyBytesToGo(data, args[0])
-		if err := app.Restore(data); err != nil {
-			return false
-		}
-		return true
+		return app.Restore(data) == nil
 	}))
 
 	select {}

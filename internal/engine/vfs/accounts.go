@@ -1,0 +1,41 @@
+package vfs
+
+import (
+	"strings"
+
+	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/user"
+)
+
+// accounts is how the user database reads /etc/passwd, /etc/group and
+// /etc/shadow: straight off the nodes, with no permission check.
+//
+// The bypass has to exist — authentication runs before there is an identity
+// to check against — so it is kept as narrow as it can be. The type is
+// unexported and never handed out, which leaves this file as the only way
+// into the tree that skips the checks, and /etc/shadow root-only to every
+// other one.
+type accounts struct{ root *Inode }
+
+var _ user.Reader = accounts{}
+
+func (a accounts) ReadRaw(p string) ([]byte, error) {
+	curr := a.root
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if !curr.IsDir() {
+			return nil, filesystem.ErrNotDir
+		}
+		next, ok := curr.Lookup(seg)
+		if !ok {
+			return nil, filesystem.ErrNotExist
+		}
+		curr = next
+	}
+	if curr.IsDir() {
+		return nil, filesystem.ErrIsDir
+	}
+	return curr.Bytes(), nil
+}

@@ -1,0 +1,35 @@
+package commands
+
+import "fmt"
+
+type Su struct{}
+
+var _ Command = Su{}
+
+func (c Su) Name() string { return "su" }
+
+func (c Su) Usage() string { return "su [user] [password] — switch user (default root)" }
+
+func (c Su) Run(ctx *Context, args []string) int {
+	name := "root"
+	if len(args) >= 1 {
+		name = args[0]
+	}
+	var password string
+	if len(args) >= 2 {
+		password = args[1]
+	}
+
+	// Nothing to switch: the caller is not a shell that has a user to change.
+	if ctx.SwitchUser == nil {
+		fmt.Fprintf(ctx.Stderr, "%s: only useful inside the shell\n", c.Name())
+		return 1
+	}
+	if err := ctx.SwitchUser(name, password); err != nil {
+		fmt.Fprintf(ctx.Stderr, "%s: %v\n", c.Name(), err)
+		return 1
+	}
+	return 0
+}
+
+func init() { Register(Su{}) }

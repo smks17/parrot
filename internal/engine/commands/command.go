@@ -1,13 +1,15 @@
 package commands
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"maps"
-	"parrot/internal/engine/vfs"
+	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/user"
 	"slices"
 	"strings"
+	"time"
 )
 
 type Command interface {
@@ -18,13 +20,31 @@ type Command interface {
 
 type Hidden interface{ Hidden() bool }
 
+type HistoryEntry struct {
+	Line string
+	At   time.Time
+}
+
 type Context struct {
-	VFS     *vfs.VFS
+	Ctx context.Context
+	VFS filesystem.FS
+
+	// Fds is the process's descriptor table. Stdin, Stdout and Stderr
+	Fds *filesystem.FDTable
+
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Env     map[string]string
-	History []string
+	History []HistoryEntry
+
+	User       user.Identity
+	SwitchUser func(name, password string) error
+}
+
+// Interrupted reports whether the user has asked for the running command to stop.
+func (c *Context) Interrupted() bool {
+	return c.Ctx != nil && c.Ctx.Err() != nil
 }
 
 // input is what a filter reads: stdin when no files are named, otherwise the
@@ -38,12 +58,12 @@ func input(ctx *Context, name string, files []string) (io.Reader, int) {
 	}
 	readers := make([]io.Reader, 0, len(files))
 	for _, file := range files {
-		content, err := ctx.VFS.Read(file)
+		rc, err := ctx.VFS.OpenDefault(file)
 		if err != nil {
 			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", name, file, err)
 			return nil, 1
 		}
-		readers = append(readers, bytes.NewReader(content))
+		readers = append(readers, rc)
 	}
 	return io.MultiReader(readers...), 0
 }

@@ -3,6 +3,8 @@ package commands
 import (
 	"fmt"
 	"io"
+
+	"parrot/internal/engine/signal"
 )
 
 type Cat struct{}
@@ -22,6 +24,9 @@ func (cat Cat) Run(ctx *Context, args []string) int {
 			return 1
 		}
 		if _, err := io.Copy(ctx.Stdout, ctx.Stdin); err != nil {
+			if status, signalled := signal.Signalled(err); signalled {
+				return status
+			}
 			fmt.Fprintf(ctx.Stderr, "%s: %v\n", cat.Name(), err)
 			return 1
 		}
@@ -30,13 +35,25 @@ func (cat Cat) Run(ctx *Context, args []string) int {
 
 	exit := 0
 	for _, arg := range args {
-		content, err := ctx.VFS.Read(arg)
+		file, err := ctx.VFS.OpenDefault(arg)
 		if err != nil {
 			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", cat.Name(), arg, err)
 			exit = 1
 			continue
 		}
-		ctx.Stdout.Write(content)
+		_, err = io.Copy(ctx.Stdout, file)
+		file.Close()
+
+		// An interrupt is the user's doing and a broken pipe is the next stage
+		// leaving early. Neither is a failure of cat: both stop the whole
+		// command and say nothing.
+		if status, signalled := signal.Signalled(err); signalled {
+			return status
+		}
+		if err != nil {
+			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", cat.Name(), arg, err)
+			exit = 1
+		}
 	}
 	return exit
 }
