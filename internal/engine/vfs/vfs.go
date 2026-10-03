@@ -294,6 +294,24 @@ func (f *VFS) Read(p string) ([]byte, error) {
 	return node.Bytes(), nil
 }
 
+func info(p string, node *Inode) filesystem.Info {
+	owner := node.Owner()
+	id := user.Identity{Name: owner.User}
+	if owner.Group != "" {
+		id.Groups = []user.Group{{Name: owner.Group}}
+	}
+	return filesystem.Info{
+		Name:    filesystem.NameFor(p),
+		Ino:     uint64(node.Ino()),
+		Path:    p,
+		Size:    node.Size(),
+		Mode:    node.Mode(),
+		Owner:   id,
+		Links:   node.Nlink(),
+		ModTime: node.ModTime(),
+	}
+}
+
 // Stat describes one entry without reading it.
 func (f *VFS) Stat(p string) (filesystem.Info, error) {
 	node, err := f.Resolve(p)
