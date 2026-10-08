@@ -81,10 +81,11 @@ func (sh *Shell) runProcess(cmd commands.Command, name string, args []string, fd
 		}
 
 		// Killed while it waits on a pipe: closing the pipe wakes it.
+		shellCtx, pipes := sh.ctx, sh.pipes
 		stop := context.AfterFunc(p.Context(), func() {
 			var sig proc.SignalError
-			if errors.As(context.Cause(p.Context()), &sig) || sh.ctx.Err() != nil {
-				for _, end := range sh.pipes {
+			if errors.As(context.Cause(p.Context()), &sig) || shellCtx.Err() != nil {
+				for _, end := range pipes {
 					end.Close()
 				}
 			}

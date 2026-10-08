@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/proc"
 	"parrot/internal/engine/user"
 	"slices"
 	"strings"
@@ -40,6 +41,11 @@ type Context struct {
 
 	User       user.Identity
 	SwitchUser func(name, password string) error
+
+	// Proc is the process table and Self the process running this command,
+	// for kill, ps and sleep.
+	Proc *proc.Table
+	Self *proc.Process
 }
 
 // Interrupted reports whether the user has asked for the running command to stop.

@@ -387,6 +387,8 @@ func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
 		History:    sh.History,
 		User:       sh.fs.Identity(),
 		SwitchUser: sh.SwitchUser,
+		Proc:       sh.procHandler,
+		Self:       sh.proc,
 	}
 }
 

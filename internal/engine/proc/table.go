@@ -395,3 +395,18 @@ func (t *Table) String() string {
 	}
 	return out
 }
+
+func (t *Table) Sleep(p *Process, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	err := p.sleepWhile(InterruptSleep, func() {
+		select {
+		case <-timer.C:
+		case <-p.Context().Done():
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return context.Cause(p.Context())
+}
