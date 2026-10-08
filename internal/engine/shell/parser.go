@@ -26,6 +26,16 @@ type Pipeline struct {
 	Cmds []Cmd
 }
 
+// Background runs Cmd without waiting for it: "sleep 5 &".
+type Background struct {
+	Cmd Cmd
+}
+
+// Not runs Cmd and inverts its status: "! grep -q foo file".
+type Not struct {
+	Cmd Cmd
+}
+
 // Simple is a plain command: "x=1 grep -n foo file > out".
 type Simple struct {
 	Assigns []Assign
@@ -144,6 +154,11 @@ func (p *parser) list(stops ...string) (*List, error) {
 		if err != nil {
 			return nil, err
 		}
+		if p.isOp("&") { // ends the command like ";", but runs it in the background
+			p.next()
+			list.Cmds = append(list.Cmds, &Background{Cmd: cmd})
+			continue
+		}
 		list.Cmds = append(list.Cmds, cmd)
 		if !p.isOp(";") && !p.isOp("\n") {
 			return list, nil // the caller decides whether this is the end
@@ -187,6 +202,14 @@ func (p *parser) skipNewlines() {
 }
 
 func (p *parser) pipeline() (Cmd, error) {
+	if p.isWord("!") { // negates the whole pipeline, as in bash
+		p.next()
+		cmd, err := p.pipeline()
+		if err != nil {
+			return nil, err
+		}
+		return &Not{Cmd: cmd}, nil
+	}
 	cmd, err := p.command()
 	if err != nil {
 		return nil, err

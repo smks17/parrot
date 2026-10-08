@@ -12,6 +12,7 @@ import (
 
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/proc"
 	"parrot/internal/engine/user"
 )
 
@@ -42,6 +43,14 @@ type Shell struct {
 	user       user.Identity
 	SwitchUser func(name, password string) error
 
+	proc        *proc.Process // the shell's process, every command's parent
+	procHandler *proc.Table
+	pid         proc.PID           // the shell's own PID, $$
+	lastBG      proc.PID           // the last job started with &, $!
+	job         *job               // the job commands run in now; nil between command lines
+	jobs        []*job             // background jobs, until wait collects them
+	pipes       []*filesystem.File // a pipeline stage's pipe ends, closed if its command is killed
+
 	// Fallback is asked for a command the shell does not have. It is how a
 	// shell on the real filesystem reaches the programs installed on the
 	// machine; the browser leaves it nil and has none.
@@ -60,7 +69,11 @@ const (
 )
 
 func New(fs filesystem.FS, switchUser func(name, password string) error) *Shell {
-	return &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser, ctx: context.Background()}
+	sh := &Shell{fs: fs, vars: map[string]string{}, funcs: map[string]*List{}, user: fs.Identity(), SwitchUser: switchUser, ctx: context.Background()}
+	sh.procHandler = proc.NewTable()
+	sh.proc = sh.procHandler.Attach(1, fs.Identity(), "prt")
+	sh.pid = sh.proc.PID
+	return sh
 }
 
 func (sh *Shell) Vars() map[string]string { return sh.vars }
@@ -148,6 +161,13 @@ func (sh *Shell) runCmd(cmd Cmd, fds *filesystem.FDTable) int {
 		return sh.runLoop(c, fds)
 	case *For:
 		return sh.runFor(c, fds)
+	case *Background:
+		return sh.runBackground(c.Cmd, fds)
+	case *Not:
+		if sh.runCmd(c.Cmd, fds) == 0 {
+			return sh.setStatus(1)
+		}
+		return sh.setStatus(0)
 	// TODO: Implement
 	// case *FuncDef:
 	// 	sh.funcs[c.Name] = c.Body
@@ -187,6 +207,9 @@ func (sh *Shell) runLoop(loop *Loop, fds *filesystem.FDTable) int {
 			return sh.status
 		}
 		succeeded := sh.runList(loop.Cond, fds) == 0
+		if sh.control == interrupting {
+			return sh.status // the condition was killed by Ctrl-C: 130, not the body's last
+		}
 		if sh.control != running {
 			return status
 		}
@@ -267,47 +290,52 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
 	if len(pipeline.Cmds) == 1 {
 		return sh.runCmd(pipeline.Cmds[0], fds)
 	}
+	return sh.inJob(func() int { // the stages are one job, so Ctrl-C reaches all of them
+		last := len(pipeline.Cmds) - 1
+		var stages sync.WaitGroup
+		statuses := make([]int, len(pipeline.Cmds))
 
-	last := len(pipeline.Cmds) - 1
-	var stages sync.WaitGroup
-	statuses := make([]int, len(pipeline.Cmds))
+		// read is the previous stage
+		var read *filesystem.File
 
-	// read is the previous stage
-	var read *filesystem.File
+		for i, cmd := range pipeline.Cmds {
+			stage := fds.Clone()
 
-	for i, cmd := range pipeline.Cmds {
-		stage := fds.Clone()
-
-		var localFdTable filesystem.FDTable
-		if read != nil {
-			stage.Set(filesystem.Stdin, read)
-			localFdTable.Alloc(read)
-		}
-		if i < last {
-			var write *filesystem.File
-			read, write = filesystem.Pipe()
-			stage.Set(filesystem.Stdout, write)
-			localFdTable.Alloc(write)
-		}
-
-		child := sh.sub()
-		stages.Add(1)
-		go func() {
-			defer stages.Done()
-			statuses[i] = child.runCmd(cmd, stage)
-			localFdTable.Destroy()
-			if child.interrupted() {
-				statuses[i] = child.status
+			var localFdTable filesystem.FDTable
+			var ends []*filesystem.File // this stage's pipe ends
+			if read != nil {
+				stage.Set(filesystem.Stdin, read)
+				localFdTable.Alloc(read)
+				ends = append(ends, read)
 			}
-		}()
-	}
-	stages.Wait()
+			if i < last {
+				var write *filesystem.File
+				read, write = filesystem.Pipe()
+				stage.Set(filesystem.Stdout, write)
+				localFdTable.Alloc(write)
+				ends = append(ends, write)
+			}
 
-	if sh.ctx.Err() != nil {
-		sh.control = interrupting
-		return sh.setStatus(130) // 128 + SIGINT, the way a real shell reports it
-	}
-	return sh.setStatus(statuses[len(statuses)-1])
+			child := sh.sub()
+			child.pipes = ends
+			stages.Add(1)
+			go func() {
+				defer stages.Done()
+				defer localFdTable.Destroy()
+				statuses[i] = child.runCmd(cmd, stage)
+				if child.interrupted() {
+					statuses[i] = child.status
+				}
+			}()
+		}
+		stages.Wait()
+
+		if sh.ctx.Err() != nil {
+			sh.control = interrupting
+			return sh.setStatus(130) // 128 + SIGINT, the way a real shell reports it
+		}
+		return sh.setStatus(statuses[last])
+	})
 }
 
 func (sh *Shell) sub() *Shell {
@@ -316,6 +344,7 @@ func (sh *Shell) sub() *Shell {
 	child.funcs = maps.Clone(sh.funcs)
 	child.params = slices.Clone(sh.params)
 	child.control = running
+	child.jobs = nil
 	return &child
 }
 
@@ -329,11 +358,11 @@ func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
 		return status
 	}
 	if cmd, ok := commands.Lookup(name); ok {
-		return cmd.Run(sh.context(fds), rest)
+		return sh.runProcess(cmd, name, rest, fds)
 	}
 	if sh.Fallback != nil {
 		if cmd, ok := sh.Fallback(name); ok {
-			return cmd.Run(sh.context(fds), rest)
+			return sh.runProcess(cmd, name, rest, fds)
 		}
 	}
 
@@ -343,13 +372,17 @@ func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
 
 // context is what the commands package expects to be handed.
 func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
+	guard := proc.StreamGuard{Context: sh.ctx, YieldToHost: sh.tick}
+	if !sh.proc.Attached() {
+		guard.Process = sh.proc
+	}
 	return &commands.Context{
 		Ctx:        sh.ctx,
 		VFS:        sh.fs,
 		Fds:        fds,
-		Stdin:      GuardReader(sh.ctx, sh.tick, fds.Stdin()),
-		Stdout:     GuardWriter(sh.ctx, sh.tick, fds.Stdout()),
-		Stderr:     GuardWriter(sh.ctx, sh.tick, fds.Stderr()),
+		Stdin:      guard.WrapReader(fds.Stdin()),
+		Stdout:     guard.WrapWriter(fds.Stdout()),
+		Stderr:     guard.WrapWriter(fds.Stderr()),
 		Env:        sh.vars,
 		History:    sh.History,
 		User:       sh.fs.Identity(),
@@ -459,6 +492,8 @@ func (sh *Shell) builtin(name string, args []string, fds *filesystem.FDTable) (i
 		return sh.source(args, fds), true
 	case "test", "[":
 		return sh.test(args, fds), true
+	case "wait":
+		return sh.waitBuiltin(args, fds), true
 	}
 	return 0, false
 }
