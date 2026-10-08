@@ -192,6 +192,13 @@ func (sh *Shell) variable(name string) string {
 		return strings.Join(sh.params, " ")
 	case "0":
 		return "prt"
+	case "$":
+		return strconv.Itoa(int(sh.pid))
+	case "!":
+		if sh.lastBG == 0 {
+			return ""
+		}
+		return strconv.Itoa(int(sh.lastBG))
 	}
 	if n, err := strconv.Atoi(name); err == nil { // $1, $2, ...
 		if n >= 1 && n <= len(sh.params) {

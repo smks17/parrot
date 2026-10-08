@@ -57,7 +57,7 @@ func runFile(app *engine.App, path string, args []string) int {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		return 127
 	}
-	return report(interruptible(func(ctx context.Context) engine.Result {
+	return report(interruptible(app, func(ctx context.Context) engine.Result {
 		return app.RunScriptStream(ctx, string(src), args, os.Stdout, os.Stderr)
 	}))
 }
@@ -87,7 +87,7 @@ func repl(app *engine.App, onDisk bool) int {
 		}
 
 		line := scanner.Text()
-		result := interruptible(func(ctx context.Context) engine.Result {
+		result := interruptible(app, func(ctx context.Context) engine.Result {
 			return app.ExecuteStream(ctx, line, os.Stdout, os.Stderr)
 		})
 		status = report(result)
@@ -103,8 +103,9 @@ func repl(app *engine.App, onDisk bool) int {
 	return status
 }
 
-// interruptible runs one piece of input with Ctrl+C wired to cancel it.
-func interruptible(run func(ctx context.Context) engine.Result) engine.Result {
+// interruptible runs one piece of input with Ctrl+C wired to cancel it, and
+// Ctrl+Z, where the host has it, to stop it.
+func interruptible(app *engine.App, run func(ctx context.Context) engine.Result) engine.Result {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -112,13 +113,25 @@ func interruptible(run func(ctx context.Context) engine.Result) engine.Result {
 	signal.Notify(sig, os.Interrupt)
 	defer signal.Stop(sig)
 
+	suspend := make(chan os.Signal, 1)
+	if len(suspendSignals) > 0 {
+		signal.Notify(suspend, suspendSignals...)
+		defer signal.Stop(suspend)
+	}
+
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
-		select {
-		case <-sig:
-			cancel()
-		case <-done:
+		for {
+			select {
+			case <-sig:
+				cancel()
+				return
+			case <-suspend:
+				app.Suspend() // the command stops; the line goes on without it
+			case <-done:
+				return
+			}
 		}
 	}()
 
