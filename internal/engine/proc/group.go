@@ -46,7 +46,7 @@ func (g *Group) Kill(sender *Process, sig Signal) error {
 	if pgid == 0 {
 		return ErrNoProcess
 	}
-	return g.table.Kill(sender, -pgid, sig)
+	return g.table.KillGroup(sender, pgid, sig)
 }
 
 // Wait waits until no process in the group is running, or with stops, until
@@ -60,6 +60,13 @@ func (g *Group) Wait(stops bool) (stopped bool) {
 		return len(g.members) == 0 || stops && stoppedLocked(g.members)
 	})
 	return len(g.members) > 0
+}
+
+func (g *Group) WaitStopped(ctx context.Context) bool {
+	t := g.table
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.waitUntilLocked(ctx, func() bool { return stoppedLocked(g.members) }) == nil
 }
 
 // joinLocked adds p to the group; the first to join leads it.

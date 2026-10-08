@@ -176,6 +176,7 @@ func (t *Table) applySignalLocked(p *Process, sig Signal) {
 		if p.state != Stop {
 			p.stateBeforeStop, p.state = p.state, Stop
 		}
+		p.stopSignal = sig
 	case Continue:
 		if p.state == Stop {
 			p.state = p.stateBeforeStop
@@ -232,23 +233,46 @@ func (t *Table) makeZombieLocked(p *Process, status int) {
 	if parent, ok := t.processes[p.PPID]; !ok || parent.PID == 1 {
 		delete(t.processes, p.PID) // init waits on everything handed to it
 	} else {
-		parent.lastSignal = SIGCHLD // ignored by default, but on the record
+		t.sendLocked(parent, SIGCHLD) // ignored unless the parent asked for it
 	}
 	t.broadcastChangeLocked()
 }
 
-// Kill sends sig to target, or to every process in group
-func (t *Table) Kill(sender *Process, target PID, sig Signal) error {
+// sendLocked delivers signal to p.
+func (t *Table) sendLocked(p *Process, sig Signal) {
+	if !p.attached {
+		t.applySignalLocked(p, sig)
+		return
+	}
+	p.lastSignal = sig
+	if c, ok := p.caughtSignals[sig]; ok {
+		deliverCaughtSignal(c, sig)
+	}
+}
+
+// KillProcess sends sig to one process.
+func (t *Table) KillProcess(sender *Process, pid PID, sig Signal) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var targets []*Process
-	if target < 0 {
-		if g, ok := t.groups[-target]; ok {
-			targets = slices.Clone(g.members)
-		}
-	} else if p, ok := t.processes[target]; ok {
+	if p, ok := t.processes[pid]; ok {
 		targets = append(targets, p)
 	}
+	return t.signalLocked(sender, targets, sig)
+}
+
+func (t *Table) KillGroup(sender *Process, pgid PID, sig Signal) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var targets []*Process
+	if g, ok := t.groups[pgid]; ok {
+		targets = slices.Clone(g.members)
+	}
+	return t.signalLocked(sender, targets, sig)
+}
+
+// signalLocked sends sig to targets, if the sender may signal them.
+func (t *Table) signalLocked(sender *Process, targets []*Process, sig Signal) error {
 	if len(targets) == 0 {
 		return ErrNoProcess
 	}
@@ -263,15 +287,9 @@ func (t *Table) Kill(sender *Process, target PID, sig Signal) error {
 		return ErrPermission
 	}
 
-	for _, p := range allowed {
-		switch {
-		case sig == 0:
-		case p.attached:
-			// A shell, or init: they ignore what would end them, the way an
-			// interactive shell does.
-			p.lastSignal = sig
-		default:
-			t.applySignalLocked(p, sig)
+	if sig != 0 { // 0 only asks whether the targets exist and may be signalled
+		for _, p := range allowed {
+			t.sendLocked(p, sig)
 		}
 	}
 	return nil
@@ -293,7 +311,7 @@ func (t *Table) Wait(procs []*Process, stops bool) (status int, stopped bool) {
 	}
 	for _, p := range procs {
 		if p.state == Stop {
-			return 128 + int(p.lastSignal), true // 148 for Ctrl-Z, as in bash
+			return 128 + int(p.stopSignal), true // 148 for Ctrl-Z, as in bash
 		}
 	}
 	return 0, true // unreachable: waitUntilLocked returned, so all are done or stopped
@@ -408,5 +426,7 @@ func (t *Table) Sleep(p *Process, d time.Duration) error {
 	if err != nil {
 		return err
 	}
-	return context.Cause(p.Context())
+	// Stopped while it slept: the time ran out, but it must not go on
+	// before SIGCONT. Yield parks it until then.
+	return p.Yield()
 }

@@ -30,6 +30,10 @@ func (app *App) SetYield(tick func()) {
 	app.session.shell.SetYield(tick)
 }
 
+// Suspend is Ctrl-Z: it stops the command running now and keeps it as a job.
+// The host calls it from another goroutine, while ExecuteStream runs.
+func (app *App) Suspend() { app.session.shell.Suspend() }
+
 // NewAppOn starts a shell on a filesystem of your choosing
 func NewAppOn(fsys filesystem.FS) *App {
 	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
@@ -197,6 +201,10 @@ func (s *Session) runStream(ctx context.Context, src string, out, errOut io.Writ
 			errW = errOut
 		}
 	}
+
+	// Which background jobs have ended since the last line, told the way
+	// bash does before its prompt.
+	s.shell.ReportFinishedJobs(errW)
 
 	s.shell.SetContext(ctx)
 	defer s.shell.SetContext(context.Background())

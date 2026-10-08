@@ -48,8 +48,9 @@ type Shell struct {
 	pid         proc.PID           // the shell's own PID, $$
 	lastBG      proc.PID           // the last job started with &, $!
 	job         *job               // the job commands run in now; nil between command lines
-	jobs        []*job             // background jobs, until wait collects them
+	jobs        []*job             // background and stopped jobs, until wait, fg or jobs collects them
 	pipes       []*filesystem.File // a pipeline stage's pipe ends, closed if its command is killed
+	lastProcess *proc.Process      // the last process this shell started
 
 	// Fallback is asked for a command the shell does not have. It is how a
 	// shell on the real filesystem reaches the programs installed on the
@@ -290,7 +291,7 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
 	if len(pipeline.Cmds) == 1 {
 		return sh.runCmd(pipeline.Cmds[0], fds)
 	}
-	return sh.inJob(func() int { // the stages are one job, so Ctrl-C reaches all of them
+	return sh.inJob(fds, func() int { // the stages are one job, so Ctrl-C reaches all of them
 		last := len(pipeline.Cmds) - 1
 		var stages sync.WaitGroup
 		statuses := make([]int, len(pipeline.Cmds))
@@ -321,10 +322,20 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
 			stages.Add(1)
 			go func() {
 				defer stages.Done()
-				defer localFdTable.Destroy()
 				statuses[i] = child.runCmd(cmd, stage)
 				if child.interrupted() {
 					statuses[i] = child.status
+				}
+				// A stage Ctrl-Z stopped still reads and writes its pipe once
+				// fg or bg continues it, so its ends stay open until its process
+				// ends; then the next stage sees EOF, as it would have.
+				if p := child.lastProcess; p != nil && sh.procHandler.Stopped([]*proc.Process{p}) {
+					go func() {
+						sh.procHandler.Wait([]*proc.Process{p}, false)
+						localFdTable.Destroy()
+					}()
+				} else {
+					localFdTable.Destroy()
 				}
 			}()
 		}
@@ -345,6 +356,7 @@ func (sh *Shell) sub() *Shell {
 	child.params = slices.Clone(sh.params)
 	child.control = running
 	child.jobs = nil
+	child.lastProcess = nil
 	return &child
 }
 
@@ -377,18 +389,19 @@ func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
 		guard.Process = sh.proc
 	}
 	return &commands.Context{
-		Ctx:        sh.ctx,
-		VFS:        sh.fs,
-		Fds:        fds,
-		Stdin:      guard.WrapReader(fds.Stdin()),
-		Stdout:     guard.WrapWriter(fds.Stdout()),
-		Stderr:     guard.WrapWriter(fds.Stderr()),
-		Env:        sh.vars,
-		History:    sh.History,
-		User:       sh.fs.Identity(),
-		SwitchUser: sh.SwitchUser,
-		Proc:       sh.procHandler,
-		Self:       sh.proc,
+		Ctx:             sh.ctx,
+		VFS:             sh.fs,
+		Fds:             fds,
+		Stdin:           guard.WrapReader(fds.Stdin()),
+		Stdout:          guard.WrapWriter(fds.Stdout()),
+		Stderr:          guard.WrapWriter(fds.Stderr()),
+		Env:             sh.vars,
+		History:         sh.History,
+		User:            sh.fs.Identity(),
+		SwitchUser:      sh.SwitchUser,
+		Proc:            sh.procHandler,
+		Self:            sh.proc,
+		JobProcessGroup: sh.jobProcessGroup,
 	}
 }
 
@@ -496,6 +509,12 @@ func (sh *Shell) builtin(name string, args []string, fds *filesystem.FDTable) (i
 		return sh.test(args, fds), true
 	case "wait":
 		return sh.waitBuiltin(args, fds), true
+	case "jobs":
+		return sh.jobsBuiltin(fds), true
+	case "fg":
+		return sh.fgBuiltin(args, fds), true
+	case "bg":
+		return sh.bgBuiltin(args, fds), true
 	}
 	return 0, false
 }

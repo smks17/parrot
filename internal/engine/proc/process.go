@@ -173,6 +173,7 @@ type Process struct {
 	stateBeforeStop  ProcessState // what it goes back to on SIGCONT
 	exitCode         int
 	lastSignal       Signal
+	stopSignal       Signal        // what stopped it last; lastSignal moves on, a SIGCHLD say
 	attached         bool          // runs on a goroutine the table does not own
 	cpuTime          time.Duration // time spent holding the CPU
 	onCPUSince       time.Time     // when it last got the CPU
@@ -257,7 +258,7 @@ func (p *Process) Killed() Signal {
 	if errors.As(context.Cause(p.ctx), &sig) {
 		return Signal(sig)
 	}
-	return SIGINT // the shell's own context was cancelled: Ctrl-C
+	return 0 // ended on its own: makeZombieLocked cancels with no signal
 }
 
 func (p *Process) OnSignal(forward func(Signal)) (stop func()) {

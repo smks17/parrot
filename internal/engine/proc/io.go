@@ -99,7 +99,7 @@ func (w *guardedWriter) Write(b []byte) (int, error) {
 	}
 	n, err := w.guard.transferOffCPUIfBlocking(w.writer, func() (int, error) { return w.writer.Write(b) })
 	if p := w.guard.Process; p != nil && isBrokenPipeError(err) {
-		p.table.Kill(nil, p.PID, SIGPIPE)
+		p.table.KillProcess(nil, p.PID, SIGPIPE)
 	}
 	return n, err
 }

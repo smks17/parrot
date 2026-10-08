@@ -46,6 +46,9 @@ type Context struct {
 	// for kill, ps and sleep.
 	Proc *proc.Table
 	Self *proc.Process
+
+	// JobProcessGroup turns a job reference such as %1 into the job's process group.
+	JobProcessGroup func(jobReference string) (proc.PID, error)
 }
 
 // Interrupted reports whether the user has asked for the running command to stop.

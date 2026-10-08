@@ -21,12 +21,10 @@ func (c Kill) Usage() string {
 
 func (c Kill) Run(ctx *Context, args []string) int {
 	sig := proc.SIGTERM
-	for len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "-" {
+	// The signal is the one option, and only first: after it every "-N" is a
+	// group, as in "kill -TERM -300".
+	if len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "-" && args[0] != "--" {
 		arg := args[0]
-		if arg == "--" { // the end of options: what follows is PIDs, even -1
-			args = args[1:]
-			break
-		}
 		switch {
 		case arg == "-l":
 			for _, s := range proc.Signals() {
@@ -54,6 +52,9 @@ func (c Kill) Run(ctx *Context, args []string) int {
 			sig, args = s, args[1:]
 		}
 	}
+	if len(args) > 0 && args[0] == "--" { // the end of options: what follows is PIDs, even -1
+		args = args[1:]
+	}
 	if len(args) == 0 {
 		fmt.Fprintln(ctx.Stderr, "kill: usage: kill [-s sigspec | -sigspec] pid ...")
 		return 1
@@ -61,13 +62,34 @@ func (c Kill) Run(ctx *Context, args []string) int {
 
 	status := 0
 	for _, arg := range args {
+		if strings.HasPrefix(arg, "%") && ctx.JobProcessGroup != nil {
+			// A job is its whole process group: every stage of a pipeline.
+			pgid, err := ctx.JobProcessGroup(arg)
+			if err != nil {
+				fmt.Fprintf(ctx.Stderr, "kill: %v\n", err)
+				status = 1
+				continue
+			}
+			if err := ctx.Proc.KillGroup(ctx.Self, pgid, sig); err != nil {
+				fmt.Fprintf(ctx.Stderr, "kill: %s - %s\n", arg, killMessage(err))
+				status = 1
+			}
+			continue
+		}
 		pid, err := strconv.Atoi(arg)
 		if err != nil {
 			fmt.Fprintf(ctx.Stderr, "kill: %s: arguments must be process or job IDs\n", arg)
 			status = 1
 			continue
 		}
-		if err := ctx.Proc.Kill(ctx.Self, proc.PID(pid), sig); err != nil {
+		// The kill(2) convention: a negative number names a group, by the
+		// ID of its leader.
+		if pid < 0 {
+			err = ctx.Proc.KillGroup(ctx.Self, proc.PID(-pid), sig)
+		} else {
+			err = ctx.Proc.KillProcess(ctx.Self, proc.PID(pid), sig)
+		}
+		if err != nil {
 			fmt.Fprintf(ctx.Stderr, "kill: (%d) - %s\n", pid, killMessage(err))
 			status = 1
 		}
