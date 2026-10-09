@@ -1,7 +1,6 @@
 package shell
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 )
@@ -71,10 +70,10 @@ type For struct {
 	Body  *List
 }
 
-// type FuncDef struct {
-// 	Name string
-// 	Body *List
-// }
+type FuncDef struct {
+	Name string
+	Body *List
+}
 
 // eof is a sentinel operator at the end of the tokens, so that the parser can
 // always look at a token without checking how many are left.
@@ -241,7 +240,7 @@ func (p *parser) command() (Cmd, error) {
 		return p.loop(true)
 	case p.isWord("for"):
 		return p.forCmd()
-	case p.isFuncDef():
+	case p.isFuncDef(), p.isWord("function"):
 		return p.funcDef()
 	}
 	return p.simple()
@@ -351,9 +350,45 @@ func (p *parser) isFuncDef() bool {
 		p.tokens[p.pos+1].Op == "(" && p.tokens[p.pos+2].Op == ")"
 }
 
+// funcDef parses "name() { list; }", or bash's "function name { list; }",
+// where the "()" is optional.
 func (p *parser) funcDef() (Cmd, error) {
-	return nil, errors.New("not implemented") // TODO: implement
+	keyword := p.isWord("function")
+	if keyword {
+		p.next()
+		if !p.tok().IsWord() {
+			return nil, p.unexpected()
+		}
+	}
+	name := wordText(p.next().Word)
+	if !isName(name) {
+		return nil, fmt.Errorf("syntax error: %q is not a valid function name", name)
+	}
+	if p.isOp("(") {
+		p.next()
+		if !p.isOp(")") {
+			return nil, p.unexpected()
+		}
+		p.next()
+	} else if !keyword {
+		return nil, p.unexpected()
+	}
 
+	// The body is a group in braces. "{" and "}" are words, not operators,
+	// so "}" only closes the group where a command could start: "echo }"
+	// prints a brace.
+	p.skipNewlines()
+	if err := p.consume("{"); err != nil {
+		return nil, err
+	}
+	body, err := p.list("}")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.consume("}"); err != nil {
+		return nil, err
+	}
+	return &FuncDef{Name: name, Body: body}, nil
 }
 
 var redirects = map[string]bool{">": true, ">>": true, "<": true, "2>": true, "2>>": true, "2>&1": true, ">&2": true}
