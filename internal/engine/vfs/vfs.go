@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
 )
 
@@ -193,14 +194,14 @@ func (f *VFS) splitParent(p string) (parent *Inode, name string, err error) {
 	return parent, name, nil
 }
 
-func (f *VFS) OpenDefault(p string) (*filesystem.File, error) {
-	return f.Open(p, filesystem.O_RDONLY)
+func (f *VFS) OpenDefault(p string) (*stream.File, error) {
+	return f.Open(p, stream.O_RDONLY)
 }
 
-func (f *VFS) Open(p string, flags filesystem.OpenFlags) (*filesystem.File, error) {
+func (f *VFS) Open(p string, flags stream.OpenFlags) (*stream.File, error) {
 	node, err := f.Resolve(p)
 	if err != nil {
-		if !errors.Is(err, filesystem.ErrNotExist) || flags&filesystem.O_CREATE == 0 {
+		if !errors.Is(err, filesystem.ErrNotExist) || flags&stream.O_CREATE == 0 {
 			return nil, err
 		}
 		if err := f.Create(p); err != nil {
@@ -220,7 +221,7 @@ func (f *VFS) Open(p string, flags filesystem.OpenFlags) (*filesystem.File, erro
 	if err := f.checkPerm(node, need); err != nil {
 		return nil, err
 	}
-	return filesystem.OpenFile(node, flags)
+	return stream.OpenFile(node, flags)
 }
 
 func (f *VFS) create(p string, node *Inode) error {

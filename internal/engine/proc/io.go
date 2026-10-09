@@ -66,14 +66,11 @@ func (g StreamGuard) transferOffCPUIfBlocking(stream any, transfer func() (int, 
 	return n, err
 }
 
-// canBlock reports whether a read or write on stream can wait. A descriptor
-// may be a pipe; a buffer or the terminal never waits.
 func canBlock(stream any) bool {
-	switch stream.(type) {
-	case *filesystem.File, *io.PipeReader, *io.PipeWriter:
-		return true
-	}
-	return false
+	b, ok := stream.(interface {
+		MayBlock() bool
+	})
+	return ok && b.MayBlock()
 }
 
 type guardedReader struct {

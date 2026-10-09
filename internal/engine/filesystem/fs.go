@@ -1,6 +1,9 @@
 package filesystem
 
-import "parrot/internal/engine/user"
+import (
+	"parrot/internal/engine/stream"
+	"parrot/internal/engine/user"
+)
 
 // FS is everything a command needs from a filesystem.
 type FS interface {
@@ -15,8 +18,8 @@ type FS interface {
 	List(path string) ([]Info, error)
 	Walk(path string, do func(info Info) error) error
 
-	Open(path string, flags OpenFlags) (*File, error)
-	OpenDefault(path string) (*File, error)
+	Open(path string, flags stream.OpenFlags) (*stream.File, error)
+	OpenDefault(path string) (*stream.File, error)
 
 	Read(path string) ([]byte, error)
 	Write(path string, content []byte, appending bool) error

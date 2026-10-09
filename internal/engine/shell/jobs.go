@@ -11,8 +11,8 @@ import (
 	"sync"
 
 	"parrot/internal/engine/commands"
-	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/proc"
+	"parrot/internal/engine/stream"
 )
 
 // A job is what one command line, or one "&", runs.
@@ -66,7 +66,7 @@ func (j *job) text() string {
 
 // inJob runs fn as a foreground job of its own, unless the shell is already
 // running inside a job
-func (sh *Shell) inJob(fds *filesystem.FDTable, fn func() int) int {
+func (sh *Shell) inJob(fds *stream.FDTable, fn func() int) int {
 	if sh.job != nil {
 		return fn()
 	}
@@ -93,7 +93,7 @@ func (sh *Shell) Suspend() { sh.procHandler.SignalForeground(proc.SIGTSTP) }
 // suspend keeps a foreground job that Ctrl-Z stopped as one of the shell's
 // jobs, so that fg and bg can carry on with it. Its watcher is the
 // goroutine that waits for it to end, wherever it then runs.
-func (sh *Shell) suspend(j *job, fds *filesystem.FDTable) {
+func (sh *Shell) suspend(j *job, fds *stream.FDTable) {
 	j.id = sh.nextJobID()
 	sh.jobs = append(sh.jobs, j)
 	procs := j.processes()
@@ -108,7 +108,7 @@ func (sh *Shell) suspend(j *job, fds *filesystem.FDTable) {
 
 // runProcess runs a command as a child process of the shell, in the current
 // job, and waits for it, or, in the foreground, until it is stopped.
-func (sh *Shell) runProcess(cmd commands.Command, name string, args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) runProcess(cmd commands.Command, name string, args []string, fds *stream.FDTable) int {
 	return sh.inJob(fds, func() int {
 		j := sh.job
 		// A copy, so the command sees p as its process. It is taken here, on
@@ -163,7 +163,7 @@ func (sh *Shell) runProcess(cmd commands.Command, name string, args []string, fd
 	})
 }
 
-func (sh *Shell) runBackground(cmd Cmd, fds *filesystem.FDTable) int {
+func (sh *Shell) runBackground(cmd Cmd, fds *stream.FDTable) int {
 	j := sh.newJob(sh.nextJobID(), false)
 	child := sh.sub()
 	child.job, child.ctx = j, context.Background()
@@ -268,7 +268,7 @@ func (sh *Shell) printJob(w io.Writer, j *job) {
 }
 
 // jobsBuiltin is "jobs". A job reported as ended is forgotten, as in bash.
-func (sh *Shell) jobsBuiltin(fds *filesystem.FDTable) int {
+func (sh *Shell) jobsBuiltin(fds *stream.FDTable) int {
 	for _, j := range sh.jobs {
 		sh.printJob(fds.Stdout(), j)
 	}
@@ -289,7 +289,7 @@ func (sh *Shell) ReportFinishedJobs(w io.Writer) {
 
 // it continues a job and gives it the terminal, then
 // waits for it the way it waits for any foreground job.
-func (sh *Shell) fgBuiltin(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) fgBuiltin(args []string, fds *stream.FDTable) int {
 	jobReference := "" // none given: the current job
 	if len(args) > 0 {
 		jobReference = args[0]
@@ -322,7 +322,7 @@ func (sh *Shell) fgBuiltin(args []string, fds *filesystem.FDTable) int {
 }
 
 // it continues a stopped job where it is, in the background.
-func (sh *Shell) bgBuiltin(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) bgBuiltin(args []string, fds *stream.FDTable) int {
 	jobReference := "" // none given: the current job
 	if len(args) > 0 {
 		jobReference = args[0]
@@ -342,7 +342,7 @@ func (sh *Shell) bgBuiltin(args []string, fds *filesystem.FDTable) int {
 }
 
 // waitBuiltin is "wait": with no arguments it waits for every background job
-func (sh *Shell) waitBuiltin(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) waitBuiltin(args []string, fds *stream.FDTable) int {
 	if len(args) == 0 {
 		for _, j := range sh.jobs {
 			if !sh.waitJob(j) {

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/stream"
 )
 
 func (f *FS) Stat(path string) (filesystem.Info, error) {
@@ -55,11 +56,11 @@ func (f *FS) Walk(path string, do func(filesystem.Info) error) error {
 	})
 }
 
-func (f *FS) OpenDefault(path string) (*filesystem.File, error) {
-	return f.Open(path, filesystem.O_RDONLY)
+func (f *FS) OpenDefault(path string) (*stream.File, error) {
+	return f.Open(path, stream.O_RDONLY)
 }
 
-func (f *FS) Open(path string, flags filesystem.OpenFlags) (*filesystem.File, error) {
+func (f *FS) Open(path string, flags stream.OpenFlags) (*stream.File, error) {
 	target := f.resolve(path)
 
 	// A directory is read with List, not with read(2), as in the in-memory tree.
@@ -76,13 +77,13 @@ func (f *FS) Open(path string, flags filesystem.OpenFlags) (*filesystem.File, er
 	default:
 		host = os.O_RDONLY
 	}
-	if flags&filesystem.O_CREATE != 0 {
+	if flags&stream.O_CREATE != 0 {
 		host |= os.O_CREATE
 	}
-	if flags&filesystem.O_TRUNC != 0 && flags.Writable() {
+	if flags&stream.O_TRUNC != 0 && flags.Writable() {
 		host |= os.O_TRUNC
 	}
-	if flags&filesystem.O_APPEND != 0 {
+	if flags&stream.O_APPEND != 0 {
 		host |= os.O_APPEND
 	}
 
@@ -90,7 +91,7 @@ func (f *FS) Open(path string, flags filesystem.OpenFlags) (*filesystem.File, er
 	if err != nil {
 		return nil, translate(err)
 	}
-	return filesystem.NewHostFile(file, flags), nil
+	return stream.NewHostFile(file, flags), nil
 }
 
 func (f *FS) Read(path string) ([]byte, error) {

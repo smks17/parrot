@@ -1,4 +1,4 @@
-package filesystem
+package stream
 
 import (
 	"errors"
@@ -40,6 +40,29 @@ type Store interface {
 	IsDir() bool
 }
 
+// Blockable is a stream that can say whether a read or write on it may wait.
+// A process sleeps off the CPU around one that may.
+type Blockable interface {
+	MayBlock() bool
+}
+
+// MayBlock reports whether a read or write here can wait: on a pipe, until
+// the other end catches up, or on a stream that says it can. A file in the
+// tree never waits.
+func (f *File) MayBlock() bool {
+	for _, stream := range []any{f.reader, f.writer} {
+		switch s := stream.(type) {
+		case *pipe, *Buffer:
+			return true
+		case Blockable:
+			if s.MayBlock() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // An open file description
 type File struct {
 	mu     sync.Mutex
@@ -63,13 +86,6 @@ func NewHostFile(f io.ReadWriteCloser, flags OpenFlags) *File {
 	return &File{reader: f, writer: f, closer: f, flags: flags}
 }
 
-// a one-way channel joining two file descriptions.
-func Pipe() (r *File, w *File) {
-	pr, pw := io.Pipe()
-	return &File{reader: pr, closer: pr, flags: O_RDONLY},
-		&File{writer: pw, closer: pw, flags: O_WRONLY}
-}
-
 func pipeErr(err error) error {
 	if errors.Is(err, io.ErrClosedPipe) {
 		return ErrBrokenPipe
@@ -79,12 +95,22 @@ func pipeErr(err error) error {
 
 func (f *File) Read(p []byte) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	if f.closed || !f.flags.Readable() {
+		f.mu.Unlock()
 		return 0, ErrBadFD
 	}
+	if pipe, isPipe := f.reader.(*pipe); isPipe {
+		// A read from a pipe can wait for as long as its writer likes.
+		// Holding the lock through it would keep Close out, and Close is how
+		// a killed process is woken. The pipe has a lock of its own.
+		f.mu.Unlock()
+		n, err := pipe.Read(p)
+		return n, pipeErr(err)
+	}
+	defer f.mu.Unlock()
 	if f.reader != nil {
+		// Any other stream, a host reader say, may not be safe to share, so
+		// the lock keeps two processes' reads apart.
 		n, err := f.reader.Read(p)
 		return n, pipeErr(err)
 	}
@@ -101,11 +127,19 @@ func (f *File) Read(p []byte) (int, error) {
 
 func (f *File) Write(p []byte) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	if f.closed || !f.flags.Writable() {
+		f.mu.Unlock()
 		return 0, ErrBadFD
 	}
+	switch buffer := f.writer.(type) {
+	case *pipe, *Buffer:
+		// As in Read: a write to a full buffer can wait, and Close must
+		// still get in. Both have a lock of their own.
+		f.mu.Unlock()
+		n, err := buffer.Write(p)
+		return n, pipeErr(err)
+	}
+	defer f.mu.Unlock()
 	if f.writer != nil {
 		n, err := f.writer.Write(p)
 		return n, pipeErr(err)

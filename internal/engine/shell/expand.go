@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/stream"
 )
 
 // fields collects the strings a word expands to. One is being built at any
@@ -52,7 +52,7 @@ func (f *fields) result() []string {
 	return f.all
 }
 
-func (sh *Shell) expandWords(words []Word, fds *filesystem.FDTable) ([]string, error) {
+func (sh *Shell) expandWords(words []Word, fds *stream.FDTable) ([]string, error) {
 	var pieces []string
 	for _, word := range words {
 		expanded, err := sh.expandWord(word, fds)
@@ -64,7 +64,7 @@ func (sh *Shell) expandWords(words []Word, fds *filesystem.FDTable) ([]string, e
 	return pieces, nil
 }
 
-func (sh *Shell) expandWord(word Word, fds *filesystem.FDTable) ([]string, error) {
+func (sh *Shell) expandWord(word Word, fds *stream.FDTable) ([]string, error) {
 	if len(word) == 1 && word[0].Quote == Double && word[0].Text == "$@" {
 		return append([]string(nil), sh.params...), nil
 	}
@@ -94,7 +94,7 @@ func (sh *Shell) expandWord(word Word, fds *filesystem.FDTable) ([]string, error
 
 // expandOne expands a word that cannot become more than one string: the value
 // of an assignment, or the file a redirection names.
-func (sh *Shell) expandOne(word Word, fds *filesystem.FDTable) (string, error) {
+func (sh *Shell) expandOne(word Word, fds *stream.FDTable) (string, error) {
 	fields, err := sh.expandWord(word, fds)
 	if err != nil {
 		return "", err
@@ -103,7 +103,7 @@ func (sh *Shell) expandOne(word Word, fds *filesystem.FDTable) (string, error) {
 }
 
 // expandText replaces every $... in a piece of text.
-func (sh *Shell) expandText(text string, fds *filesystem.FDTable) (string, error) {
+func (sh *Shell) expandText(text string, fds *stream.FDTable) (string, error) {
 	var out strings.Builder
 	for i := 0; i < len(text); {
 		if text[i] != '$' {
@@ -124,7 +124,7 @@ func (sh *Shell) expandText(text string, fds *filesystem.FDTable) (string, error
 }
 
 // expandDollar takes one whole $... and returns what it stands for.
-func (sh *Shell) expandDollar(src string, fds *filesystem.FDTable) (string, error) {
+func (sh *Shell) expandDollar(src string, fds *stream.FDTable) (string, error) {
 	body := src[1:] // drop the $
 	switch {
 	case strings.HasPrefix(body, "(("): // $((1 + 2))
@@ -136,7 +136,7 @@ func (sh *Shell) expandDollar(src string, fds *filesystem.FDTable) (string, erro
 
 	case strings.HasPrefix(body, "("): // $(echo hi)
 		var out bytes.Buffer
-		sh.Run(trimEnds(body), filesystem.NewStdTable(strings.NewReader(""), &out, fds.Stderr()))
+		sh.Run(trimEnds(body), stream.NewStdTable(strings.NewReader(""), &out, fds.Stderr()))
 		return strings.TrimRight(out.String(), "\n"), nil
 
 	case strings.HasPrefix(body, "{"): // ${name}, ${name:-default}, ${#name}
@@ -152,7 +152,7 @@ func trimEnds(s string) string {
 	return s[1 : len(s)-1]
 }
 
-func (sh *Shell) expandBrace(inner string, fds *filesystem.FDTable) (string, error) {
+func (sh *Shell) expandBrace(inner string, fds *stream.FDTable) (string, error) {
 	if name, ok := strings.CutPrefix(inner, "#"); ok {
 		return strconv.Itoa(len(sh.variable(name))), nil // ${#name} is a length
 	}
@@ -220,7 +220,7 @@ var precedence = map[string]int{
 	"*": 6, "/": 6, "%": 6,
 }
 
-func (sh *Shell) arith(src string, fds *filesystem.FDTable) (int, error) {
+func (sh *Shell) arith(src string, fds *stream.FDTable) (int, error) {
 	// $1 and $x are replaced first, so the rest of this file only has to
 	// know about numbers, plain names and operators.
 	src, err := sh.expandText(src, fds)

@@ -11,6 +11,7 @@ import (
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/shell"
+	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
 	"parrot/internal/engine/vfs"
 )
@@ -18,8 +19,9 @@ import (
 const ShellName = "prt"
 
 type App struct {
-	session *Session
-	tick    func()
+	session    *Session
+	tick       func()
+	background output
 }
 
 func NewApp() *App { return &App{session: NewSession()} }
@@ -30,13 +32,19 @@ func (app *App) SetYield(tick func()) {
 	app.session.shell.SetYield(tick)
 }
 
+func (app *App) SetBackgroundOutput(out, errOut io.Writer) {
+	app.background = output{out, errOut}
+	app.session.background = app.background
+	app.session.setOutput(out, errOut)
+}
+
 // Suspend is Ctrl-Z: it stops the command running now and keeps it as a job.
 // The host calls it from another goroutine, while ExecuteStream runs.
 func (app *App) Suspend() { app.session.shell.Suspend() }
 
 // NewAppOn starts a shell on a filesystem of your choosing
 func NewAppOn(fsys filesystem.FS) *App {
-	session := &Session{fs: fsys, shell: shell.New(fsys, nil)}
+	session := &Session{fs: fsys, shell: shell.New(fsys, nil), stdout: stream.NewBuffer(), stderr: stream.NewBuffer()}
 	session.shell.SwitchUser = session.SwitchUser
 	id := fsys.Identity()
 	vars := session.shell.Vars()
@@ -55,20 +63,36 @@ func (app *App) Restore(data []byte) error {
 		return err
 	}
 	session.shell.SetYield(app.tick)
+	session.background = app.background
+	session.setOutput(app.background.out, app.background.errOut)
+	// The old session's jobs have nowhere to write now, so close them. The new session's jobs will write to the new background.
+	app.session.stdout.Close()
+	app.session.stderr.Close()
 	app.session = session
 	return nil
 }
 
 // Session is one shell and the filesystem it runs on.
 type Session struct {
-	fs    filesystem.FS
-	shell *shell.Shell
+	fs     filesystem.FS
+	shell  *shell.Shell
+	stdout *stream.Buffer
+	stderr *stream.Buffer
+
+	background output // where output goes between lines; nil keeps it waiting
+}
+
+type output struct{ out, errOut io.Writer }
+
+func (s *Session) setOutput(out, errOut io.Writer) {
+	s.stdout.SetOutput(out)
+	s.stderr.SetOutput(errOut)
 }
 
 func NewSession() *Session { return newSession(vfs.New()) }
 
 func newSession(filesystem *vfs.VFS) *Session {
-	s := &Session{fs: filesystem, shell: shell.New(filesystem, nil)}
+	s := &Session{fs: filesystem, shell: shell.New(filesystem, nil), stdout: stream.NewBuffer(), stderr: stream.NewBuffer()}
 	s.shell.SwitchUser = s.SwitchUser
 	resident, err := filesystem.UsersDB().Resident()
 	if err != nil || s.SetUser(resident.Name) != nil {
@@ -202,14 +226,15 @@ func (s *Session) runStream(ctx context.Context, src string, out, errOut io.Writ
 		}
 	}
 
-	// Which background jobs have ended since the last line, told the way
-	// bash does before its prompt.
-	s.shell.ReportFinishedJobs(errW)
+	s.setOutput(outW, errW)
+	fds := stream.NewFDTable(stream.NewStreamFile(strings.NewReader(""), nil), s.stdout.WriteEnd(), s.stderr.WriteEnd())
+	s.shell.ReportFinishedJobs(fds.Stderr())
 
 	s.shell.SetContext(ctx)
 	defer s.shell.SetContext(context.Background())
 
-	status := s.shell.Run(src, filesystem.NewStdTable(strings.NewReader(""), outW, errW))
+	status := s.shell.Run(src, fds)
+	s.setOutput(s.background.out, s.background.errOut)
 	code, exited := s.shell.Exiting()
 	if exited {
 		status = code

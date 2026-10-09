@@ -7,6 +7,7 @@ import (
 	"maps"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/proc"
+	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
 	"slices"
 	"strings"
@@ -31,7 +32,7 @@ type Context struct {
 	VFS filesystem.FS
 
 	// Fds is the process's descriptor table. Stdin, Stdout and Stderr
-	Fds *filesystem.FDTable
+	Fds *stream.FDTable
 
 	Stdin   io.Reader
 	Stdout  io.Writer
