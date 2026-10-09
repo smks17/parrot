@@ -13,6 +13,7 @@ import (
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/proc"
+	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
 )
 
@@ -45,12 +46,12 @@ type Shell struct {
 
 	proc        *proc.Process // the shell's process, every command's parent
 	procHandler *proc.Table
-	pid         proc.PID           // the shell's own PID, $$
-	lastBG      proc.PID           // the last job started with &, $!
-	job         *job               // the job commands run in now; nil between command lines
-	jobs        []*job             // background and stopped jobs, until wait, fg or jobs collects them
-	pipes       []*filesystem.File // a pipeline stage's pipe ends, closed if its command is killed
-	lastProcess *proc.Process      // the last process this shell started
+	pid         proc.PID       // the shell's own PID, $$
+	lastBG      proc.PID       // the last job started with &, $!
+	job         *job           // the job commands run in now; nil between command lines
+	jobs        []*job         // background and stopped jobs, until wait, fg or jobs collects them
+	pipes       []*stream.File // a pipeline stage's pipe ends, closed if its command is killed
+	lastProcess *proc.Process  // the last process this shell started
 
 	// Fallback is asked for a command the shell does not have. It is how a
 	// shell on the real filesystem reaches the programs installed on the
@@ -121,7 +122,7 @@ func (sh *Shell) Exiting() (int, bool) {
 }
 
 // Run parses and runs source text, returning the status of the last command.
-func (sh *Shell) Run(src string, fds *filesystem.FDTable) int {
+func (sh *Shell) Run(src string, fds *stream.FDTable) int {
 	list, err := Parse(src)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -134,7 +135,7 @@ func (sh *Shell) Run(src string, fds *filesystem.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runList(list *List, fds *filesystem.FDTable) int {
+func (sh *Shell) runList(list *List, fds *stream.FDTable) int {
 	status := 0
 	for _, cmd := range list.Cmds {
 		if sh.interrupted() {
@@ -148,7 +149,7 @@ func (sh *Shell) runList(list *List, fds *filesystem.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runCmd(cmd Cmd, fds *filesystem.FDTable) int {
+func (sh *Shell) runCmd(cmd Cmd, fds *stream.FDTable) int {
 	switch c := cmd.(type) {
 	case *List:
 		return sh.runList(c, fds)
@@ -179,7 +180,7 @@ func (sh *Shell) runCmd(cmd Cmd, fds *filesystem.FDTable) int {
 	return sh.fail(fds, fmt.Errorf("cannot run %T", cmd))
 }
 
-func (sh *Shell) runAndOr(cmd *AndOr, fds *filesystem.FDTable) int {
+func (sh *Shell) runAndOr(cmd *AndOr, fds *stream.FDTable) int {
 	status := sh.runCmd(cmd.Left, fds)
 	if sh.control != running {
 		return status
@@ -191,7 +192,7 @@ func (sh *Shell) runAndOr(cmd *AndOr, fds *filesystem.FDTable) int {
 	return status
 }
 
-func (sh *Shell) runIf(cmd *If, fds *filesystem.FDTable) int {
+func (sh *Shell) runIf(cmd *If, fds *stream.FDTable) int {
 	if sh.runList(cmd.Cond, fds) == 0 {
 		return sh.runList(cmd.Then, fds)
 	}
@@ -201,7 +202,7 @@ func (sh *Shell) runIf(cmd *If, fds *filesystem.FDTable) int {
 	return sh.setStatus(0)
 }
 
-func (sh *Shell) runLoop(loop *Loop, fds *filesystem.FDTable) int {
+func (sh *Shell) runLoop(loop *Loop, fds *stream.FDTable) int {
 	status := 0
 	for turn := 0; turn < maxLoops; turn++ {
 		if sh.interrupted() {
@@ -225,7 +226,7 @@ func (sh *Shell) runLoop(loop *Loop, fds *filesystem.FDTable) int {
 	return sh.fail(fds, fmt.Errorf("loop ran too long")) // TODO: create error object
 }
 
-func (sh *Shell) runFor(cmd *For, fds *filesystem.FDTable) int {
+func (sh *Shell) runFor(cmd *For, fds *stream.FDTable) int {
 	items, err := sh.expandWords(cmd.Items, fds)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -259,7 +260,7 @@ func (sh *Shell) stopLoop() bool {
 	return true
 }
 
-func (sh *Shell) runSimple(cmd *Simple, fds *filesystem.FDTable) int {
+func (sh *Shell) runSimple(cmd *Simple, fds *stream.FDTable) int {
 	args, err := sh.expandWords(cmd.Words, fds)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -284,10 +285,10 @@ func (sh *Shell) runSimple(cmd *Simple, fds *filesystem.FDTable) int {
 }
 
 // runPipeline runs the stages at the same time, each reading what the one
-// before it writes through an io.Pipe. A pipe holds no buffer, so a fast
+// before it writes through an stream.Pipe. A pipe holds no buffer, so a fast
 // producer waits for its reader instead of growing memory, and "cat file |
 // wc" starts counting before cat is done.
-func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
+func (sh *Shell) runPipeline(pipeline *Pipeline, fds *stream.FDTable) int {
 	if len(pipeline.Cmds) == 1 {
 		return sh.runCmd(pipeline.Cmds[0], fds)
 	}
@@ -297,22 +298,22 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *filesystem.FDTable) int {
 		statuses := make([]int, len(pipeline.Cmds))
 
 		// read is the previous stage
-		var read *filesystem.File
+		var read *stream.File
 
 		for i, cmd := range pipeline.Cmds {
 			stage := fds.Clone()
 
-			var localFdTable filesystem.FDTable
-			var ends []*filesystem.File // this stage's pipe ends
+			var localFdTable stream.FDTable
+			var ends []*stream.File // this stage's pipe ends
 			if read != nil {
-				stage.Set(filesystem.Stdin, read)
+				stage.Set(stream.Stdin, read)
 				localFdTable.Alloc(read)
 				ends = append(ends, read)
 			}
 			if i < last {
-				var write *filesystem.File
-				read, write = filesystem.Pipe()
-				stage.Set(filesystem.Stdout, write)
+				var write *stream.File
+				read, write = stream.Pipe()
+				stage.Set(stream.Stdout, write)
 				localFdTable.Alloc(write)
 				ends = append(ends, write)
 			}
@@ -360,7 +361,7 @@ func (sh *Shell) sub() *Shell {
 	return &child
 }
 
-func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) runCommand(args []string, fds *stream.FDTable) int {
 	name, rest := args[0], args[1:]
 
 	if body, ok := sh.funcs[name]; ok {
@@ -383,7 +384,7 @@ func (sh *Shell) runCommand(args []string, fds *filesystem.FDTable) int {
 }
 
 // context is what the commands package expects to be handed.
-func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
+func (sh *Shell) context(fds *stream.FDTable) *commands.Context {
 	guard := proc.StreamGuard{Context: sh.ctx, YieldToHost: sh.tick}
 	if !sh.proc.Attached() {
 		guard.Process = sh.proc
@@ -405,12 +406,12 @@ func (sh *Shell) context(fds *filesystem.FDTable) *commands.Context {
 	}
 }
 
-func (sh *Shell) callFunc(body *List, args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) callFunc(body *List, args []string, fds *stream.FDTable) int {
 	log.Fatal("Not implemented") // TODO
 	return 0
 }
 
-func (sh *Shell) redirect(redirs []Redirect, fds *filesystem.FDTable) (*filesystem.FDTable, error) {
+func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTable, error) {
 	if len(redirs) == 0 {
 		return fds, nil
 	}
@@ -418,14 +419,14 @@ func (sh *Shell) redirect(redirs []Redirect, fds *filesystem.FDTable) (*filesyst
 
 	for _, redirect := range redirs {
 		if redirect.Op == "2>&1" {
-			err := fds.Dup(filesystem.Stdout, filesystem.Stderr)
+			err := fds.Dup(stream.Stdout, stream.Stderr)
 			if err != nil {
 				return fds, err
 			}
 			continue
 		}
 		if redirect.Op == ">&2" {
-			err := fds.Dup(filesystem.Stderr, filesystem.Stdout)
+			err := fds.Dup(stream.Stderr, stream.Stdout)
 			if err != nil {
 				return fds, err
 			}
@@ -438,25 +439,25 @@ func (sh *Shell) redirect(redirs []Redirect, fds *filesystem.FDTable) (*filesyst
 		}
 
 		if redirect.Op == "<" {
-			file, err := sh.fs.Open(name, filesystem.O_RDONLY)
+			file, err := sh.fs.Open(name, stream.O_RDONLY)
 			if err != nil {
 				return fds, fmt.Errorf("%s: %v", name, err)
 			}
-			fds.Set(filesystem.Stdin, file)
+			fds.Set(stream.Stdin, file)
 			continue
 		}
 
-		flags := filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_TRUNC
+		flags := stream.O_WRONLY | stream.O_CREATE | stream.O_TRUNC
 		if strings.HasSuffix(redirect.Op, ">>") {
-			flags = filesystem.O_WRONLY | filesystem.O_CREATE | filesystem.O_APPEND
+			flags = stream.O_WRONLY | stream.O_CREATE | stream.O_APPEND
 		}
 		file, err := sh.fs.Open(name, flags)
 		if err != nil {
 			return fds, fmt.Errorf("%s: %v", name, err)
 		}
-		fd := filesystem.Stdout
+		fd := stream.Stdout
 		if strings.HasPrefix(redirect.Op, "2") {
-			fd = filesystem.Stderr
+			fd = stream.Stderr
 		}
 		fds.Set(fd, file)
 	}
@@ -468,7 +469,7 @@ func (sh *Shell) setStatus(status int) int {
 	return status
 }
 
-func (sh *Shell) builtin(name string, args []string, fds *filesystem.FDTable) (int, bool) {
+func (sh *Shell) builtin(name string, args []string, fds *stream.FDTable) (int, bool) {
 	switch name {
 	case ":":
 		return 0, true
@@ -530,7 +531,7 @@ func exitStatus(args []string, fallback int) int {
 	return status
 }
 
-func (sh *Shell) source(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) source(args []string, fds *stream.FDTable) int {
 	if len(args) == 0 {
 		fmt.Fprintln(fds.Stderr(), "prt: source: no file given")
 		return 2
@@ -559,7 +560,7 @@ func (sh *Shell) source(args []string, fds *filesystem.FDTable) int {
 
 // test is the "test" builtin, which is also written "[ ... ]". It is what
 // gives "if" and "while" something to ask about.
-func (sh *Shell) test(args []string, fds *filesystem.FDTable) int {
+func (sh *Shell) test(args []string, fds *stream.FDTable) int {
 	if len(args) > 0 && args[len(args)-1] == "]" {
 		args = args[:len(args)-1] // the closing bracket is not an argument
 	}
@@ -649,7 +650,7 @@ func (sh *Shell) testTwo(left, op, right string) (bool, error) {
 	return false, fmt.Errorf("unknown comparison %q", op)
 }
 
-func (sh *Shell) fail(fds *filesystem.FDTable, err error) int {
+func (sh *Shell) fail(fds *stream.FDTable, err error) int {
 	fmt.Fprintf(fds.Stderr(), "prt: %v\n", err)
 	return sh.setStatus(2)
 }

@@ -23,6 +23,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		os.Exit(1)
 	}
+	app.SetBackgroundOutput(os.Stdout, os.Stderr)
 
 	// A named file is run as a script, with the rest of the arguments as $1
 	if args := flag.Args(); len(args) > 0 {
