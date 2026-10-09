@@ -3,7 +3,6 @@ package shell
 import (
 	"context"
 	"fmt"
-	"log"
 	"maps"
 	"slices"
 	"strconv"
@@ -170,10 +169,9 @@ func (sh *Shell) runCmd(cmd Cmd, fds *stream.FDTable) int {
 			return sh.setStatus(1)
 		}
 		return sh.setStatus(0)
-	// TODO: Implement
-	// case *FuncDef:
-	// 	sh.funcs[c.Name] = c.Body
-	// 	return sh.setStatus(0)
+	case *FuncDef:
+		sh.funcs[c.Name] = c.Body
+		return sh.setStatus(0)
 	case *Simple:
 		return sh.runSimple(c, fds)
 	}
@@ -408,8 +406,23 @@ func (sh *Shell) context(fds *stream.FDTable) *commands.Context {
 }
 
 func (sh *Shell) callFunc(body *List, args []string, fds *stream.FDTable) int {
-	log.Fatal("Not implemented") // TODO
-	return 0
+	if sh.calls >= maxCalls {
+		fmt.Fprintf(fds.Stderr(), "prt: maximum function nesting level exceeded (%d)\n", maxCalls)
+		return 1
+	}
+
+	saved := sh.params
+	sh.params = args
+	sh.calls++
+	status := sh.runList(body, fds)
+	sh.calls--
+	sh.params = saved
+
+	if sh.control == returning { // "return" ends this function and nothing more
+		sh.control = running
+		status = sh.code
+	}
+	return sh.setStatus(status)
 }
 
 func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTable, error) {

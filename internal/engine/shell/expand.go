@@ -136,7 +136,7 @@ func (sh *Shell) expandDollar(src string, fds *stream.FDTable) (string, error) {
 
 	case strings.HasPrefix(body, "("): // $(echo hi)
 		var out bytes.Buffer
-		sh.Run(trimEnds(body), stream.NewStdTable(strings.NewReader(""), &out, fds.Stderr()))
+		sh.sub().Run(trimEnds(body), stream.NewStdTable(strings.NewReader(""), &out, fds.Stderr()))
 		return strings.TrimRight(out.String(), "\n"), nil
 
 	case strings.HasPrefix(body, "{"): // ${name}, ${name:-default}, ${#name}
