@@ -320,6 +320,7 @@ func (sh *Shell) runPipeline(pipeline *Pipeline, fds *stream.FDTable) int {
 
 			child := sh.sub()
 			child.pipes = ends
+			child.fs = newDirView(sh.fs) // a stage is a subshell: its cd stays in it
 			stages.Add(1)
 			go func() {
 				defer stages.Done()

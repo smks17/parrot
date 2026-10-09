@@ -167,6 +167,7 @@ func (sh *Shell) runBackground(cmd Cmd, fds *stream.FDTable) int {
 	j := sh.newJob(sh.nextJobID(), false)
 	child := sh.sub()
 	child.job, child.ctx = j, context.Background()
+	child.fs = newDirView(sh.fs) // a cd inside it must not move the shell
 	sh.jobs = append(sh.jobs, j)
 	go func() { j.finish(child.runCmd(cmd, fds)) }()
 
