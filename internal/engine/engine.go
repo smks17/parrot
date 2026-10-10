@@ -116,6 +116,7 @@ func (s *Session) SetUser(name string) error {
 		return err
 	}
 	tree.SetIdentity(id)
+	s.shell.SetUser(id)
 	vars := s.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
