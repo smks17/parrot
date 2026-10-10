@@ -90,12 +90,12 @@ func lexWord(src string, i int) (Word, int, error) {
 			word = append(word, Piece{Text: src[i+1 : i+1+end], Quote: Single})
 			i += end + 2
 		case '"':
-			inner, next, err := lexDoubleQuote(src, i)
+			pieces, next, err := lexDoubleQuote(src, i)
 			if err != nil {
 				return nil, 0, err
 			}
 			flush()
-			word = append(word, Piece{Text: inner, Quote: Double})
+			word = append(word, pieces...)
 			i = next
 		case '\\':
 			if i+1 >= len(src) {
@@ -122,14 +122,33 @@ func lexWord(src string, i int) (Word, int, error) {
 	return word, i, nil
 }
 
-func lexDoubleQuote(src string, i int) (string, int, error) {
+// lexDoubleQuote reads "..." starting at i. It is one piece, unless it holds
+// an escaped \$: that dollar must stay a dollar, and expansion would take it
+// for the start of a variable if it stayed in the double-quoted text, so it
+// goes in a single-quoted piece of its own.
+func lexDoubleQuote(src string, i int) ([]Piece, int, error) {
+	var pieces []Piece
 	var text strings.Builder
+	flush := func() {
+		if text.Len() > 0 {
+			pieces = append(pieces, Piece{Text: text.String(), Quote: Double})
+			text.Reset()
+		}
+	}
 	for i++; i < len(src); {
 		switch {
 		case src[i] == '"':
-			return text.String(), i + 1, nil
-		case src[i] == '\\' && i+1 < len(src) && strings.IndexByte(`"\$`, src[i+1]) >= 0:
-			// Inside double quotes a backslash only escapes these three; in
+			flush()
+			if len(pieces) == 0 { // "" is still a word: an empty one
+				pieces = append(pieces, Piece{Quote: Double})
+			}
+			return pieces, i + 1, nil
+		case src[i] == '\\' && i+1 < len(src) && src[i+1] == '$':
+			flush()
+			pieces = append(pieces, Piece{Text: "$", Quote: Single})
+			i += 2
+		case src[i] == '\\' && i+1 < len(src) && strings.IndexByte(`"\`, src[i+1]) >= 0:
+			// Inside double quotes a backslash only escapes these and $; in
 			// front of anything else it is an ordinary character.
 			text.WriteByte(src[i+1])
 			i += 2
@@ -142,7 +161,7 @@ func lexDoubleQuote(src string, i int) (string, int, error) {
 			i++
 		}
 	}
-	return "", 0, fmt.Errorf(`unmatched "`)
+	return nil, 0, fmt.Errorf(`unmatched "`)
 }
 
 // scanDollar returns the index just past the $... construct starting at i.
