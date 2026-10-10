@@ -395,7 +395,7 @@ func (sh *Shell) context(fds *stream.FDTable) *commands.Context {
 	}
 	return &commands.Context{
 		Ctx:             sh.ctx,
-		VFS:             sh.fs,
+		VFS:             viewFor(sh.fs, fds),
 		Fds:             fds,
 		Stdin:           guard.WrapReader(fds.Stdin()),
 		Stdout:          guard.WrapWriter(fds.Stdout()),
@@ -457,8 +457,10 @@ func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTab
 			return fds, err
 		}
 
+		// Opened on behalf of the table being built, so "> /dev/stderr" after
+		// "2>&1" sees what the redirects before it left, left to right as in sh.
 		if redirect.Op == "<" {
-			file, err := sh.fs.Open(name, stream.O_RDONLY)
+			file, err := sh.fs.OpenFor(name, stream.O_RDONLY, fds)
 			if err != nil {
 				return fds, fmt.Errorf("%s: %v", name, err)
 			}
@@ -470,7 +472,7 @@ func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTab
 		if strings.HasSuffix(redirect.Op, ">>") {
 			flags = stream.O_WRONLY | stream.O_CREATE | stream.O_APPEND
 		}
-		file, err := sh.fs.Open(name, flags)
+		file, err := sh.fs.OpenFor(name, flags, fds)
 		if err != nil {
 			return fds, fmt.Errorf("%s: %v", name, err)
 		}

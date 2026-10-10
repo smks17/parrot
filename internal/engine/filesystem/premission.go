@@ -26,8 +26,9 @@ const (
 	ModeOtherWrite   FileMode = 0002
 	ModeOtherExecute FileMode = 0001
 
-	// File type
-	ModeDirectory FileMode = 1 << 14
+	// File type, where Unix keeps S_IFDIR and S_IFCHR
+	ModeDirectory  FileMode = 1 << 14
+	ModeCharDevice FileMode = 1 << 13
 )
 
 const (
@@ -45,9 +46,12 @@ const (
 
 func (m FileMode) String() string {
 	var b [10]byte
-	if m&ModeDirectory != 0 {
+	switch {
+	case m&ModeDirectory != 0:
 		b[0] = 'd'
-	} else {
+	case m&ModeCharDevice != 0:
+		b[0] = 'c'
+	default:
 		b[0] = '-'
 	}
 	const chars = "rwx"
@@ -96,6 +100,10 @@ func (m FileMode) CanExecute(permClass PermClass) bool {
 
 func (m FileMode) IsDirectory() bool {
 	return m&ModeDirectory != 0
+}
+
+func (m FileMode) IsCharDevice() bool {
+	return m&ModeCharDevice != 0
 }
 
 // permBits is what a VFS operation needs from a node. Create and Remove

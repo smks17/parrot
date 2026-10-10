@@ -50,15 +50,15 @@ type Blockable interface {
 // the other end catches up, or on a stream that says it can. A file in the
 // tree never waits.
 func (f *File) MayBlock() bool {
-	for _, stream := range []any{f.reader, f.writer} {
-		switch s := stream.(type) {
-		case *pipe, *Buffer:
-			return true
-		case Blockable:
-			if s.MayBlock() {
-				return true
-			}
-		}
+	return mayBlockStream(f.reader) || mayBlockStream(f.writer)
+}
+
+func mayBlockStream(stream any) bool {
+	switch s := stream.(type) {
+	case *pipe, *Buffer:
+		return true
+	case Blockable:
+		return s.MayBlock()
 	}
 	return false
 }
@@ -76,8 +76,16 @@ type File struct {
 	closer io.Closer
 }
 
+// Store is the file in the tree this description is over, or nil for a pipe,
+// a device or any other stream. It is set when the description is made.
+func (f *File) Store() Store { return f.inode }
+
 func NewStreamFile(r io.Reader, w io.Writer) *File {
 	return &File{reader: r, writer: w, flags: O_RDWR}
+}
+
+func NewDeviceFile(device io.ReadWriter, flags OpenFlags) *File {
+	return &File{reader: device, writer: device, flags: flags}
 }
 
 // NewHostFile is a description over a descriptor the machine opened, which is
@@ -99,12 +107,13 @@ func (f *File) Read(p []byte) (int, error) {
 		f.mu.Unlock()
 		return 0, ErrBadFD
 	}
-	if pipe, isPipe := f.reader.(*pipe); isPipe {
+	if mayBlockStream(f.reader) {
 		// A read from a pipe can wait for as long as its writer likes.
 		// Holding the lock through it would keep Close out, and Close is how
 		// a killed process is woken. The pipe has a lock of its own.
+		reader := f.reader
 		f.mu.Unlock()
-		n, err := pipe.Read(p)
+		n, err := reader.Read(p)
 		return n, pipeErr(err)
 	}
 	defer f.mu.Unlock()
@@ -131,12 +140,12 @@ func (f *File) Write(p []byte) (int, error) {
 		f.mu.Unlock()
 		return 0, ErrBadFD
 	}
-	switch buffer := f.writer.(type) {
-	case *pipe, *Buffer:
+	if mayBlockStream(f.writer) {
 		// As in Read: a write to a full buffer can wait, and Close must
 		// still get in. Both have a lock of their own.
+		writer := f.writer
 		f.mu.Unlock()
-		n, err := buffer.Write(p)
+		n, err := writer.Write(p)
 		return n, pipeErr(err)
 	}
 	defer f.mu.Unlock()
@@ -218,6 +227,8 @@ func NewStdTable(in io.Reader, out, err io.Writer) *FDTable {
 		NewStreamFile(nil, err),
 	)
 }
+
+func (t *FDTable) File(fd int) (*File, error) { return t.get(fd) }
 
 func (t *FDTable) get(fd int) (*File, error) {
 	t.mu.Lock()

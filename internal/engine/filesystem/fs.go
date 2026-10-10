@@ -20,6 +20,7 @@ type FS interface {
 
 	Open(path string, flags stream.OpenFlags) (*stream.File, error)
 	OpenDefault(path string) (*stream.File, error)
+	OpenFor(path string, flags stream.OpenFlags, fds *stream.FDTable) (*stream.File, error)
 
 	Read(path string) ([]byte, error)
 	Write(path string, content []byte, appending bool) error

@@ -16,6 +16,7 @@ var (
 	ErrNotOwner    = errors.New("operation not permitted")
 	ErrInvalid     = errors.New("invalid argument")
 	ErrLinkDir     = errors.New("hard link not allowed for directory")
+	ErrNotRegular  = errors.New("not a regular file")
 
 	// These belong to open files, which live in stream; they are the same
 	// values here so a caller can name either package.
@@ -23,4 +24,5 @@ var (
 	ErrBadFD          = stream.ErrBadFD
 	ErrNotImplemented = stream.ErrNotImplemented
 	ErrBrokenPipe     = stream.ErrBrokenPipe
+	ErrNoProcess      = stream.ErrNoProcess
 )

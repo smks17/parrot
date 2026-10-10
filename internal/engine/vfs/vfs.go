@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"parrot/internal/engine/dev"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -23,6 +24,7 @@ func rootOwner() Ownership { return Ownership{User: user.RootName, Group: user.R
 func New() *VFS {
 	root := newRoot(rootOwner())
 	seedEtc(root)
+	seedDev(root)
 
 	f := newVFS(root, root)
 	resident, err := f.db.Resident()
@@ -84,6 +86,7 @@ func makeHome(root *Inode, id user.Identity, mode filesystem.FileMode) {
 }
 
 func FromRoot(root *Inode, cwd string) *VFS {
+	seedDev(root) // a snapshot never holds devices, so they are made again
 	f := newVFS(root, root)
 	if dir, err := f.Resolve(cwd); err == nil && dir.IsDir() {
 		f.cwd = dir
@@ -199,6 +202,10 @@ func (f *VFS) OpenDefault(p string) (*stream.File, error) {
 }
 
 func (f *VFS) Open(p string, flags stream.OpenFlags) (*stream.File, error) {
+	return f.OpenFor(p, flags, nil)
+}
+
+func (f *VFS) OpenFor(p string, flags stream.OpenFlags, fds *stream.FDTable) (*stream.File, error) {
 	node, err := f.Resolve(p)
 	if err != nil {
 		if !errors.Is(err, filesystem.ErrNotExist) || flags&stream.O_CREATE == 0 {
@@ -221,7 +228,49 @@ func (f *VFS) Open(p string, flags stream.OpenFlags) (*stream.File, error) {
 	if err := f.checkPerm(node, need); err != nil {
 		return nil, err
 	}
-	return stream.OpenFile(node, flags)
+	// A device has no bytes to truncate or append to, so those flags mean
+	// nothing to it, as they mean nothing to /dev/null on Linux.
+	switch device := node.Device().(type) {
+	case nil:
+		return stream.OpenFile(node, flags)
+	case dev.Descriptor:
+		return f.reopen(device, flags, need, fds)
+	default:
+		return stream.NewDeviceFile(device, flags), nil
+	}
+}
+
+func (f *VFS) reopen(device dev.Descriptor, flags stream.OpenFlags, need filesystem.PermBits, fds *stream.FDTable) (*stream.File, error) {
+	target, err := device.Target(fds)
+	if errors.Is(err, stream.ErrBadFD) {
+		return nil, filesystem.ErrNotExist // fd N is closed: the link dangles
+	}
+	if err != nil {
+		return nil, err
+	}
+	if node, ok := target.Store().(*Inode); ok {
+		if err := f.checkPerm(node, need); err != nil {
+			return nil, err
+		}
+		return stream.OpenFile(node, flags)
+	}
+	return stream.NewDeviceFile(target, flags), nil
+}
+
+func (f *VFS) MakeDevice(p string, device dev.Device, perm filesystem.FileMode) error {
+	parent, name, err := f.splitPath(p)
+	if err != nil {
+		return err
+	}
+	if old, ok := parent.Lookup(name); ok {
+		if old.Device() == nil {
+			return filesystem.ErrExists // never replace a real file
+		}
+		if err := parent.Unlink(name); err != nil {
+			return err
+		}
+	}
+	return parent.Link(name, NewDevice(device, rootOwner(), perm))
 }
 
 func (f *VFS) create(p string, node *Inode) error {
@@ -273,6 +322,15 @@ func (f *VFS) Write(p string, b []byte, writeAppend bool) error {
 	if node.IsDir() {
 		return filesystem.ErrIsDir
 	}
+	if node.Device() != nil {
+		file, err := f.Open(p, stream.O_WRONLY)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = file.Write(b)
+		return err
+	}
 	if writeAppend {
 		node.Append(b)
 	} else {
@@ -291,6 +349,9 @@ func (f *VFS) Read(p string) ([]byte, error) {
 	}
 	if node.IsDir() {
 		return nil, filesystem.ErrIsDir
+	}
+	if node.Device() != nil {
+		return nil, filesystem.ErrNotRegular // /dev/zero has no whole content
 	}
 	return node.Bytes(), nil
 }
@@ -396,6 +457,9 @@ func (f *VFS) Copy(src, dst string, recursive bool) error {
 	// what cp does and what the real filesystem already said.
 	if !recursive && node.IsDir() {
 		return filesystem.ErrIsDir
+	}
+	if node.Device() != nil {
+		return filesystem.ErrNotRegular
 	}
 	// Copying reads the source's content.
 	if err := f.checkPerm(node, filesystem.PermRead); err != nil {

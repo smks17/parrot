@@ -40,6 +40,9 @@ func (node *Inode) dump(name string, written map[Ino]bool) *DumpNode {
 		d.Mtime = mtime.Unix()
 	}
 	for _, entry := range node.Entries() {
+		if entry.Inode.Device() != nil {
+			continue // TODO
+		}
 		d.Children = append(d.Children, entry.Inode.dump(entry.Name, written))
 	}
 	return d

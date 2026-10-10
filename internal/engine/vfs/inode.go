@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"parrot/internal/engine/clock"
+	"parrot/internal/engine/dev"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/user"
 )
@@ -56,6 +57,9 @@ type Inode struct {
 	nlink   int
 	content []byte            // a regular file's bytes
 	entries map[string]*Inode // a directory's entries, including "." and ".."
+
+	// device is what a device file opens onto.
+	device dev.Device
 }
 
 // Dirent is one directory entry: a name, and the inode it points at.
@@ -85,6 +89,16 @@ func NewDir(owner Ownership) *Inode {
 	}
 	dir.entries[currDir] = dir
 	return dir
+}
+
+func NewDevice(device dev.Device, owner Ownership, perm filesystem.FileMode) *Inode {
+	return &Inode{
+		ino:    allocIno(),
+		mode:   filesystem.ModeCharDevice | perm&0777,
+		owner:  owner,
+		mtime:  clock.Now(),
+		device: device,
+	}
 }
 
 func newRoot(owner Ownership) *Inode {
@@ -127,6 +141,8 @@ func (node *Inode) Mode() filesystem.FileMode {
 }
 
 func (node *Inode) IsDir() bool { return node.Mode().IsDirectory() }
+
+func (node *Inode) Device() dev.Device { return node.device }
 
 func (node *Inode) Owner() Ownership {
 	node.mu.RLock()
@@ -389,6 +405,9 @@ func (node *Inode) Walk(path string, do func(path string, n *Inode) error) error
 
 func (node *Inode) Clone() *Inode {
 	owner, mode := node.meta()
+	if node.device != nil {
+		return NewDevice(node.device, owner, mode)
+	}
 	if !mode.IsDirectory() {
 		return NewFile(node.Bytes(), owner).setOwner(owner, mode)
 	}

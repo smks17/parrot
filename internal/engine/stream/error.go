@@ -9,4 +9,5 @@ var (
 	ErrBrokenPipe     = errors.New("broken pipe")
 	ErrIsDir          = errors.New("is a directory")
 	ErrNotImplemented = errors.New("not implemented")
+	ErrNoProcess      = errors.New("no such device or address")
 )

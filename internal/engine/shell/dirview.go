@@ -8,37 +8,59 @@ import (
 	"parrot/internal/engine/stream"
 )
 
-// dirView is a filesystem with a working directory of its own. A subshell —
-// a pipeline stage, a job run with "&" — gets one, so its cd moves only
-// itself, as a forked process's would. Without it every shell shares the
-// one cwd on the filesystem, and "(cd /tmp; ls) &" would move the prompt.
+// dirView is the filesystem as one running command sees it, and it carries two
+// things: A working directory of its own and the descriptor table of the command
 type dirView struct {
 	filesystem.FS
-	cwd string
+	cwd *string
+	fds *stream.FDTable
 }
 
 func newDirView(fs filesystem.FS) *dirView {
-	if view, ok := fs.(*dirView); ok {
-		return &dirView{FS: view.FS, cwd: view.cwd}
+	if view, ok := fs.(*dirView); ok && view.cwd != nil {
+		cwd := *view.cwd
+		return &dirView{FS: view.FS, cwd: &cwd}
 	}
-	return &dirView{FS: fs, cwd: fs.Cwd()}
+	cwd := fs.Cwd()
+	return &dirView{FS: fs, cwd: &cwd}
+}
+
+// viewFor is fs as the command with descriptor table fds sees it.
+func viewFor(fs filesystem.FS, fds *stream.FDTable) *dirView {
+	if view, ok := fs.(*dirView); ok {
+		shared := *view
+		shared.fds = fds
+		return &shared
+	}
+	return &dirView{FS: fs, fds: fds}
 }
 
 // abs is p as seen from the view's directory. Lexical cleaning is safe here
 // because there are no symlinks: ".." always means the parent.
 func (v *dirView) abs(p string) string {
+	if v.cwd == nil {
+		return p // the filesystem resolves against its own directory
+	}
 	if p == "" {
-		return v.cwd
+		return *v.cwd
 	}
 	if strings.HasPrefix(p, "/") {
 		return p
 	}
-	return path.Join(v.cwd, p)
+	return path.Join(*v.cwd, p)
 }
 
-func (v *dirView) Cwd() string { return v.cwd }
+func (v *dirView) Cwd() string {
+	if v.cwd == nil {
+		return v.FS.Cwd()
+	}
+	return *v.cwd
+}
 
 func (v *dirView) Chdir(p string) error {
+	if v.cwd == nil {
+		return v.FS.Chdir(p)
+	}
 	target := v.abs(p)
 	info, err := v.FS.Stat(target)
 	if err != nil {
@@ -52,7 +74,7 @@ func (v *dirView) Chdir(p string) error {
 	if err := filesystem.CheckPerm(info.Mode, owner, v.Identity(), filesystem.PermExec); err != nil {
 		return err
 	}
-	v.cwd = target
+	*v.cwd = target
 	return nil
 }
 
@@ -62,11 +84,16 @@ func (v *dirView) Walk(p string, do func(filesystem.Info) error) error {
 	return v.FS.Walk(v.abs(p), do)
 }
 
+// Open is on behalf of the command this view was made for. OpenFor names the
+// table itself, for a redirect that is still building the command's.
 func (v *dirView) Open(p string, flags stream.OpenFlags) (*stream.File, error) {
-	return v.FS.Open(v.abs(p), flags)
+	return v.FS.OpenFor(v.abs(p), flags, v.fds)
 }
 func (v *dirView) OpenDefault(p string) (*stream.File, error) {
-	return v.FS.OpenDefault(v.abs(p))
+	return v.Open(p, stream.O_RDONLY)
+}
+func (v *dirView) OpenFor(p string, flags stream.OpenFlags, fds *stream.FDTable) (*stream.File, error) {
+	return v.FS.OpenFor(v.abs(p), flags, fds)
 }
 
 func (v *dirView) Read(p string) ([]byte, error) { return v.FS.Read(v.abs(p)) }
