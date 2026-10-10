@@ -83,6 +83,11 @@ func (sh *Shell) SetVars(vars map[string]string) { sh.vars = vars }
 
 func (sh *Shell) SetParams(params []string) { sh.params = params }
 
+func (sh *Shell) SetUser(id user.Identity) {
+	sh.user = id
+	sh.proc.SetUser(id)
+}
+
 func (sh *Shell) SetContext(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
