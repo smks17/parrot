@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"net/netip"
 	"sync"
 
@@ -20,6 +21,28 @@ type Socket struct {
 	listener Listener     // set by Listen
 	conn     Conn         // set by Connect or Accept
 	file     *stream.File // the description over conn
+
+	// owner is the context of the process the socket belongs to, and
+	// stopWatching ends the watch on it that closes the socket when it ends.
+	owner        context.Context
+	stopWatching func() bool
+}
+
+// CloseWhenDone closes the socket when ctx ends, as the kernel closes every
+// descriptor of a process that dies. A process killed while it waits in a
+// read or an accept is woken by that, the way a signal interrupts the wait
+// on Linux; and one that exits without closing its sockets leaks none.
+func (s *Socket) CloseWhenDone(ctx context.Context) {
+	if ctx == nil || ctx.Done() == nil {
+		return // a context that never ends has nothing to watch
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopWatching != nil {
+		s.stopWatching()
+	}
+	s.owner = ctx
+	s.stopWatching = context.AfterFunc(ctx, func() { s.Close() })
 }
 
 func NewSocket(n Network) *Socket {
@@ -97,7 +120,13 @@ func (s *Socket) Accept() (*Socket, error) {
 	if err != nil {
 		return nil, err
 	}
-	return connected(s.network, conn), nil
+	// The new socket belongs to the same process as the listening one.
+	accepted := connected(s.network, conn)
+	s.mu.Lock()
+	owner := s.owner
+	s.mu.Unlock()
+	accepted.CloseWhenDone(owner)
+	return accepted, nil
 }
 
 func (s *Socket) Shutdown(how ShutdownHow) error {
@@ -139,6 +168,9 @@ func (s *Socket) Close() error {
 		return stream.ErrBadFD
 	}
 	s.closed = true
+	if s.stopWatching != nil {
+		s.stopWatching()
+	}
 	switch {
 	case s.listener != nil:
 		return s.listener.Close()

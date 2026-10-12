@@ -55,6 +55,15 @@ type Context struct {
 	Network *network.NetworkManager
 }
 
+// NewSocket is socket(2) for this command: the socket belongs to its process
+// and is closed when the process ends, so a kill or Ctrl-C wakes a read or an
+// accept waiting on it, and one left open at exit is not leaked.
+func (c *Context) NewSocket() *network.Socket {
+	sock := network.NewSocket(c.Network)
+	sock.CloseWhenDone(c.Ctx)
+	return sock
+}
+
 // Interrupted reports whether the user has asked for the running command to stop.
 func (c *Context) Interrupted() bool {
 	return c.Ctx != nil && c.Ctx.Err() != nil
