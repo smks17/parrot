@@ -10,15 +10,20 @@ import (
 	"strings"
 
 	"parrot/internal/engine"
+	"parrot/internal/engine/hostnet"
 	"parrot/internal/engine/osfs"
 )
 
 func main() {
 	onDisk := flag.Bool("real", false, "work on the real filesystem instead of the in-memory one")
+	hostNetwork := flag.Bool("net", false, "give the machine the host's network as eth0")
 	flag.Usage = usage
 	flag.Parse()
 
 	app, err := start(*onDisk)
+	if err == nil && *hostNetwork {
+		err = attachHostNetwork(app)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		os.Exit(1)
@@ -33,8 +38,16 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s [-real] [script [args...]]\n\n", engine.ShellName)
+	fmt.Fprintf(os.Stderr, "usage: %s [-real] [-net] [script [args...]]\n\n", engine.ShellName)
 	flag.PrintDefaults()
+}
+
+// attachHostNetwork plugs the host's own network into the machine as eth0 and
+// sends everything lo does not cover through it
+func attachHostNetwork(app *engine.App) error {
+	nm := app.Network()
+	nm.AddInterface("eth0", hostnet.Net{})
+	return nm.SetDefaultRoute("eth0")
 }
 
 // start builds the shell over whichever filesystem was asked for.

@@ -10,6 +10,7 @@ import (
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -22,9 +23,19 @@ type App struct {
 	session    *Session
 	tick       func()
 	background output
+	network    *network.NetworkManager
 }
 
-func NewApp() *App { return &App{session: NewSession()} }
+func NewApp() *App { return &App{session: NewSession(), network: newNetwork()} }
+
+func newNetwork() *network.NetworkManager {
+	nm := network.NewNetworkManager(context.Background())
+	nm.Start()
+	return nm
+}
+
+// Network is the machine's network, for the host to plug interfaces into.
+func (app *App) Network() *network.NetworkManager { return app.network }
 
 // SetYield installs the host's hook for giving its event loop a turn.
 func (app *App) SetYield(tick func()) {
@@ -50,7 +61,7 @@ func NewAppOn(fsys filesystem.FS) *App {
 	vars := session.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
-	return &App{session: session}
+	return &App{session: session, network: newNetwork()}
 }
 
 func (app *App) Snapshot() ([]byte, error) {
