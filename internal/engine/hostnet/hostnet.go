@@ -51,6 +51,9 @@ func (c conn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// MayBlock is true: a read waits on the peer for as long as it likes
+func (c conn) MayBlock() bool { return true }
+
 func (c conn) LocalAddr() (netip.Addr, uint16)  { return split(c.TCPConn.LocalAddr()) }
 func (c conn) RemoteAddr() (netip.Addr, uint16) { return split(c.TCPConn.RemoteAddr()) }
 
