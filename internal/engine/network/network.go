@@ -38,5 +38,6 @@ var (
 
 	ErrNetUnreachable = errors.New("network is unreachable")
 	ErrNetDown        = errors.New("network is down")
+	ErrNotPermitted   = errors.New("Operation not permitted")
 	ErrNoDevice       = errors.New("no such device")
 )

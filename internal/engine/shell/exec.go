@@ -61,7 +61,7 @@ type Shell struct {
 
 	// Network is the machine's network, handed to every command. The engine
 	// sets it; a shell without one gives its commands none.
-	Network network.Network
+	Network *network.NetworkManager
 }
 
 type control int

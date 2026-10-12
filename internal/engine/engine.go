@@ -30,6 +30,7 @@ type App struct {
 func NewApp() *App {
 	app := &App{session: NewSession(), network: newNetwork()}
 	app.session.shell.Network = app.network
+	app.seedSys()
 	return app
 }
 
@@ -68,6 +69,7 @@ func NewAppOn(fsys filesystem.FS) *App {
 	vars[commands.EnvHome] = id.Home
 	app := &App{session: session, network: newNetwork()}
 	session.shell.Network = app.network
+	app.seedSys()
 	return app
 }
 
@@ -88,6 +90,7 @@ func (app *App) Restore(data []byte) error {
 	app.session.stdout.Close()
 	app.session.stderr.Close()
 	app.session = session
+	app.seedSys() // a snapshot holds no /sys
 	return nil
 }
 

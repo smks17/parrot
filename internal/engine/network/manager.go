@@ -3,7 +3,9 @@ package network
 import (
 	"context"
 	"io"
+	"maps"
 	"net/netip"
+	"slices"
 	"sync"
 )
 
@@ -15,6 +17,9 @@ type NetworkManager struct {
 	routes     []route    // longest prefix first, so the first match is the one to use
 	published  []Listener // the outside listeners of published ports
 	down       bool
+	// onNewInterface is told the name of every interface added, the way the
+	// kernel's netdevice notifier tells sysfs to make its directory.
+	onNewInterface func(name string)
 
 	ctx      context.Context
 	shutdown chan struct{}
@@ -55,8 +60,29 @@ func (nm *NetworkManager) GetInterface(name string) (Network, bool) {
 
 func (nm *NetworkManager) AddInterface(name string, network Network) {
 	nm.mu.Lock()
-	defer nm.mu.Unlock()
 	nm.interfaces[name] = network
+	nm.up[name] = true
+	notify := nm.onNewInterface
+	nm.mu.Unlock()
+	// Outside the lock, so the hook may ask the manager about the interface.
+	if notify != nil {
+		notify(name)
+	}
+}
+
+// OnNewInterface installs the hook told about every interface added from now on.
+func (nm *NetworkManager) OnNewInterface(notify func(name string)) {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	nm.onNewInterface = notify
+}
+
+// Interfaces names every interface, in order.
+func (nm *NetworkManager) Interfaces() []string {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	return slices.Sorted(maps.Keys(nm.interfaces))
+}
 }
 
 func (nm *NetworkManager) AddRoute(prefix netip.Prefix, device string) error {

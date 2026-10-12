@@ -43,6 +43,10 @@ func (node *Inode) dump(name string, written map[Ino]bool) *DumpNode {
 		if entry.Inode.Device() != nil {
 			continue // TODO
 		}
+		// sysfs is the running machine's, made again on restore, never saved.
+		if name == "" && entry.Name == sysDir {
+			continue
+		}
 		d.Children = append(d.Children, entry.Inode.dump(entry.Name, written))
 	}
 	return d
