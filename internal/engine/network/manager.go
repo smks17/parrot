@@ -120,6 +120,31 @@ func (nm *NetworkManager) addAddress(device string, addr netip.Prefix) error {
 	return nil
 }
 
+// DelAddress is ip addr del ADDR dev DEVICE. The subnet's route goes with
+// the address, unless another address on the device is in the same subnet.
+func (nm *NetworkManager) DelAddress(device string, addr netip.Prefix) error {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	if _, ok := nm.interfaces[device]; !ok {
+		return ErrNoDevice
+	}
+	at := slices.Index(nm.addrs[device], addr)
+	if at < 0 {
+		return ErrAddrNotAvail
+	}
+	nm.addrs[device] = slices.Delete(nm.addrs[device], at, at+1)
+	subnet := addr.Masked()
+	for _, other := range nm.addrs[device] {
+		if other.Masked() == subnet {
+			return nil
+		}
+	}
+	nm.routes = slices.DeleteFunc(nm.routes, func(r Route) bool {
+		return r.Prefix == subnet && r.Device == device
+	})
+	return nil
+}
+
 // Addresses are the addresses on device, in the order they were added.
 func (nm *NetworkManager) Addresses(device string) ([]netip.Prefix, error) {
 	nm.mu.RLock()

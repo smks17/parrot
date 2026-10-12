@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -14,8 +15,13 @@ var _ Command = IP{}
 
 func (IP) Name() string { return "ip" }
 func (IP) Usage() string {
-	return "ip addr [show [dev] IFACE] | ip [-4|-6] route  — show interfaces, their addresses and the routing table"
+	return "ip addr [show [dev] IFACE | add|del ADDR[/LEN] dev IFACE] | ip link [show [IFACE] | set [dev] IFACE up|down] | ip [-4|-6] route" +
+		"  — show and change interfaces, their addresses and the routing table"
 }
+
+// actions are the verbs ip knows, in the order an abbreviation is matched
+// against them, so s is show and not set.
+var actions = []string{"show", "list", "add", "delete", "set"}
 
 func (c IP) Run(ctx *Context, args []string) int {
 	family := 4
@@ -40,23 +46,149 @@ func (c IP) Run(ctx *Context, args []string) int {
 		return 1
 	}
 
-	// ip takes any prefix of an object's name, so a, ad and addr are all address.
+	// ip takes any prefix of an object's or an action's name, so a, ad and
+	// addr are all address, and with no action it shows.
 	object, rest := args[0], args[1:]
-	if len(rest) > 0 && rest[0] != "" && (strings.HasPrefix("show", rest[0]) || strings.HasPrefix("list", rest[0])) {
-		rest = rest[1:]
-	}
-	switch {
-	case strings.HasPrefix("address", object):
-		return c.addresses(ctx, rest)
-	case strings.HasPrefix("route", object):
-		if len(rest) > 0 {
-			fmt.Fprintf(ctx.Stderr, "%s: route: only show is supported\n", c.Name())
-			return 1
+	action := "show"
+	if len(rest) > 0 && rest[0] != "" {
+		for _, a := range actions {
+			if strings.HasPrefix(a, rest[0]) {
+				action, rest = a, rest[1:]
+				break
+			}
 		}
+	}
+	if action == "list" {
+		action = "show"
+	}
+
+	switch {
+	case strings.HasPrefix("address", object) && action == "show":
+		return c.addresses(ctx, rest)
+	case strings.HasPrefix("address", object) && (action == "add" || action == "delete"):
+		return c.changeAddress(ctx, action == "add", rest)
+	case strings.HasPrefix("link", object) && action == "show":
+		return c.links(ctx, rest)
+	case strings.HasPrefix("link", object) && action == "set":
+		return c.setLink(ctx, rest)
+	case strings.HasPrefix("route", object) && action == "show" && len(rest) == 0:
 		return c.routes(ctx, family)
+	case strings.HasPrefix("address", object), strings.HasPrefix("link", object), strings.HasPrefix("route", object):
+		fmt.Fprintf(ctx.Stderr, "%s: %s %s is not supported\nusage: %s\n", c.Name(), object, strings.Join(rest, " "), c.Usage())
+		return 1
 	}
 	fmt.Fprintf(ctx.Stderr, "%s: object %q is unknown\n", c.Name(), object)
 	return 1
+}
+
+// changeAddress is ip addr add|del ADDR[/LEN] dev IFACE. An address with no
+// length is a single host's, /32 or /128, as ip takes it.
+func (c IP) changeAddress(ctx *Context, add bool, args []string) int {
+	var device, given string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "dev" && i+1 < len(args):
+			device = args[i+1]
+			i++
+		case given == "":
+			given = args[i]
+		default:
+			given = "" // two addresses: refuse below rather than guess
+			i = len(args)
+		}
+	}
+	if device == "" || given == "" {
+		fmt.Fprintf(ctx.Stderr, "usage: %s\n", c.Usage())
+		return 1
+	}
+	addr, err := parseInterfaceAddr(given)
+	if err != nil {
+		fmt.Fprintf(ctx.Stderr, "Error: inet prefix is expected rather than %q.\n", given)
+		return 1
+	}
+	if !c.mayChange(ctx) {
+		return 2
+	}
+	if add {
+		err = ctx.Network.AddAddress(device, addr)
+	} else {
+		err = ctx.Network.DelAddress(device, addr)
+	}
+	return c.report(ctx, device, err)
+}
+
+// links prints what ip addr does without the addresses.
+func (c IP) links(ctx *Context, args []string) int {
+	if len(args) > 0 && args[0] == "dev" {
+		args = args[1:]
+	}
+	names := ctx.Network.Interfaces()
+	if len(args) == 1 {
+		if _, err := ctx.Network.LinkUp(args[0]); err != nil {
+			return c.report(ctx, args[0], err)
+		}
+		names = []string{args[0]}
+	} else if len(args) > 1 {
+		fmt.Fprintf(ctx.Stderr, "usage: %s\n", c.Usage())
+		return 1
+	}
+	for _, name := range names {
+		c.linkLine(ctx, name)
+	}
+	return 0
+}
+
+// setLink is ip link set [dev] IFACE up|down. Unlike ifup it says nothing
+// when the link already is the way it was asked to be.
+func (c IP) setLink(ctx *Context, args []string) int {
+	if len(args) > 0 && args[0] == "dev" {
+		args = args[1:]
+	}
+	if len(args) != 2 || (args[1] != "up" && args[1] != "down") {
+		fmt.Fprintf(ctx.Stderr, "usage: %s\n", c.Usage())
+		return 1
+	}
+	if !c.mayChange(ctx) {
+		return 2
+	}
+	return c.report(ctx, args[0], ctx.Network.SetLinkUp(args[0], args[1] == "up"))
+}
+
+// mayChange is the kernel's check that only root reconfigures the network.
+func (c IP) mayChange(ctx *Context) bool {
+	if ctx.User.IsRoot() {
+		return true
+	}
+	fmt.Fprintf(ctx.Stderr, "RTNETLINK answers: %v\n", network.ErrNotPermitted)
+	return false
+}
+
+// report prints an error the way ip does: a missing device by name, and
+// anything the kernel refused as RTNETLINK's answer, with ip's exit statuses:
+// 1 for a device it could not find, 2 for a refusal.
+func (c IP) report(ctx *Context, device string, err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, network.ErrNoDevice):
+		fmt.Fprintf(ctx.Stderr, "Cannot find device %q\n", device)
+		return 1
+	default:
+		fmt.Fprintf(ctx.Stderr, "RTNETLINK answers: %v\n", err)
+		return 2
+	}
+}
+
+// parseInterfaceAddr reads 192.168.1.5/24, or 192.168.1.5 as /32.
+func parseInterfaceAddr(s string) (netip.Prefix, error) {
+	if strings.Contains(s, "/") {
+		return netip.ParsePrefix(s)
+	}
+	ip, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	return netip.PrefixFrom(ip, ip.BitLen()), nil
 }
 
 // addresses prints each interface the way ip addr does: index, name, flags,
@@ -68,8 +200,7 @@ func (c IP) addresses(ctx *Context, args []string) int {
 	names := ctx.Network.Interfaces()
 	if len(args) == 1 {
 		if _, err := ctx.Network.LinkUp(args[0]); err != nil {
-			fmt.Fprintf(ctx.Stderr, "%s: %s: %v\n", c.Name(), args[0], err)
-			return 1
+			return c.report(ctx, args[0], err)
 		}
 		names = []string{args[0]}
 	} else if len(args) > 1 {
@@ -77,21 +208,9 @@ func (c IP) addresses(ctx *Context, args []string) int {
 		return 1
 	}
 
-	all := ctx.Network.Interfaces()
 	for _, name := range names {
-		up, _ := ctx.Network.LinkUp(name)
+		c.linkLine(ctx, name)
 		addrs, _ := ctx.Network.Addresses(name)
-
-		var flags []string
-		if isLoopback(addrs) {
-			flags = append(flags, "LOOPBACK")
-		}
-		state := "DOWN"
-		if up {
-			flags = append(flags, "UP")
-			state = "UP"
-		}
-		fmt.Fprintf(ctx.Stdout, "%d: %s: <%s> state %s\n", index(all, name), name, strings.Join(flags, ","), state)
 		for _, addr := range addrs {
 			kind, label := "inet", " "+name
 			if addr.Addr().Is6() {
@@ -101,6 +220,23 @@ func (c IP) addresses(ctx *Context, args []string) int {
 		}
 	}
 	return 0
+}
+
+// linkLine is an interface's first line in ip addr and ip link: index, name,
+// flags and state.
+func (c IP) linkLine(ctx *Context, name string) {
+	up, _ := ctx.Network.LinkUp(name)
+	addrs, _ := ctx.Network.Addresses(name)
+	var flags []string
+	if isLoopback(addrs) {
+		flags = append(flags, "LOOPBACK")
+	}
+	state := "DOWN"
+	if up {
+		flags = append(flags, "UP")
+		state = "UP"
+	}
+	fmt.Fprintf(ctx.Stdout, "%d: %s: <%s> state %s\n", index(ctx.Network.Interfaces(), name), name, strings.Join(flags, ","), state)
 }
 
 // routes prints one family's routes, the default first as ip route does. A
