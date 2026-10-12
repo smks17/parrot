@@ -60,6 +60,10 @@ func (f *FS) OpenDefault(path string) (*stream.File, error) {
 	return f.Open(path, stream.O_RDONLY)
 }
 
+func (f *FS) OpenFor(path string, flags stream.OpenFlags, _ *stream.FDTable) (*stream.File, error) {
+	return f.Open(path, flags)
+}
+
 func (f *FS) Open(path string, flags stream.OpenFlags) (*stream.File, error) {
 	target := f.resolve(path)
 
