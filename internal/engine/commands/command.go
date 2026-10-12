@@ -52,7 +52,7 @@ type Context struct {
 	// JobProcessGroup turns a job reference such as %1 into the job's process group.
 	JobProcessGroup func(jobReference string) (proc.PID, error)
 
-	Network network.Network
+	Network *network.NetworkManager
 }
 
 // Interrupted reports whether the user has asked for the running command to stop.

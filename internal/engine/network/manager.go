@@ -14,9 +14,11 @@ type NetworkManager struct {
 
 	mu         sync.RWMutex
 	interfaces map[string]Network
-	routes     []route    // longest prefix first, so the first match is the one to use
-	published  []Listener // the outside listeners of published ports
+	up         map[string]bool // ip link set NAME up|down; a down link carries nothing
+	routes     []route         // longest prefix first, so the first match is the one to use
+	published  []Listener      // the outside listeners of published ports
 	down       bool
+
 	// onNewInterface is told the name of every interface added, the way the
 	// kernel's netdevice notifier tells sysfs to make its directory.
 	onNewInterface func(name string)
@@ -42,6 +44,7 @@ func NewNetworkManager(ctx context.Context) *NetworkManager {
 		interfaces: map[string]Network{
 			"lo": lo,
 		},
+		up: map[string]bool{"lo": true},
 		routes: []route{
 			{netip.MustParsePrefix("::1/128"), "lo"},
 			{netip.MustParsePrefix("127.0.0.0/8"), "lo"},
@@ -83,6 +86,24 @@ func (nm *NetworkManager) Interfaces() []string {
 	defer nm.mu.RUnlock()
 	return slices.Sorted(maps.Keys(nm.interfaces))
 }
+
+func (nm *NetworkManager) SetLinkUp(name string, up bool) error {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	if _, ok := nm.interfaces[name]; !ok {
+		return ErrNoDevice
+	}
+	nm.up[name] = up
+	return nil
+}
+
+func (nm *NetworkManager) LinkUp(name string) (bool, error) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	if _, ok := nm.interfaces[name]; !ok {
+		return false, ErrNoDevice
+	}
+	return nm.up[name], nil
 }
 
 func (nm *NetworkManager) AddRoute(prefix netip.Prefix, device string) error {
@@ -119,7 +140,7 @@ func (nm *NetworkManager) routeTo(ip netip.Addr) (Network, error) {
 	}
 	ip = ip.Unmap()
 	for _, r := range nm.routes {
-		if r.prefix.Contains(ip) {
+		if r.prefix.Contains(ip) && nm.up[r.device] {
 			return nm.interfaces[r.device], nil
 		}
 	}
@@ -178,7 +199,7 @@ func (nm *NetworkManager) Publish(outside Network, outsideIP netip.Addr, outside
 // forward outside peer to port inside
 func (nm *NetworkManager) forward(peer Conn, port uint16) {
 	defer peer.Close()
-	target, err := nm.LO.Connect(netip.Addr{}, 0, netip.MustParseAddr("127.0.0.1"), port)
+	target, err := nm.Connect(netip.Addr{}, 0, netip.MustParseAddr("127.0.0.1"), port)
 	if err != nil {
 		return // nobody listening inside: the peer is hung up on
 	}
