@@ -2,8 +2,8 @@ package network
 
 import (
 	"context"
+	"errors"
 	"io"
-	"maps"
 	"net/netip"
 	"slices"
 	"sync"
@@ -14,9 +14,11 @@ type NetworkManager struct {
 
 	mu         sync.RWMutex
 	interfaces map[string]Network
-	up         map[string]bool // ip link set NAME up|down; a down link carries nothing
-	routes     []route         // longest prefix first, so the first match is the one to use
-	published  []Listener      // the outside listeners of published ports
+	order      []string                  // the names in the order they were added; an interface's index is its place here, from 1
+	up         map[string]bool           // ip link set NAME up|down; a down link carries nothing
+	addrs      map[string][]netip.Prefix // ip addr: each address with the length of its subnet, as 192.168.1.5/24
+	routes     []Route                   // longest prefix first, so the first match is the one to use
+	published  []Listener                // the outside listeners of published ports
 	down       bool
 
 	// onNewInterface is told the name of every interface added, the way the
@@ -30,28 +32,30 @@ type NetworkManager struct {
 
 var _ Network = (*NetworkManager)(nil)
 
-// route is one line of "ip route": the addresses in prefix go through the
-// interface called device.
-type route struct {
-	prefix netip.Prefix
-	device string
+// Route is one line of "ip route": the addresses in Prefix go through the
+// interface called Device.
+type Route struct {
+	Prefix netip.Prefix
+	Device string
 }
 
 func NewNetworkManager(ctx context.Context) *NetworkManager {
 	lo := NewLO() // one loopback, under both names, or a listener on one is missing from the other
-	return &NetworkManager{
+	nm := &NetworkManager{
 		LO: lo,
 		interfaces: map[string]Network{
 			"lo": lo,
 		},
-		up: map[string]bool{"lo": true},
-		routes: []route{
-			{netip.MustParsePrefix("::1/128"), "lo"},
-			{netip.MustParsePrefix("127.0.0.0/8"), "lo"},
-		},
+		order:    []string{"lo"},
+		up:       map[string]bool{"lo": true},
+		addrs:    map[string][]netip.Prefix{},
 		ctx:      ctx,
 		shutdown: make(chan struct{}),
 	}
+	// lo's routes come with its addresses, as every interface's do.
+	nm.addAddress("lo", netip.MustParsePrefix("127.0.0.1/8"))
+	nm.addAddress("lo", netip.MustParsePrefix("::1/128"))
+	return nm
 }
 
 func (nm *NetworkManager) GetInterface(name string) (Network, bool) {
@@ -63,6 +67,9 @@ func (nm *NetworkManager) GetInterface(name string) (Network, bool) {
 
 func (nm *NetworkManager) AddInterface(name string, network Network) {
 	nm.mu.Lock()
+	if _, replaced := nm.interfaces[name]; !replaced {
+		nm.order = append(nm.order, name)
+	}
 	nm.interfaces[name] = network
 	nm.up[name] = true
 	notify := nm.onNewInterface
@@ -80,11 +87,54 @@ func (nm *NetworkManager) OnNewInterface(notify func(name string)) {
 	nm.onNewInterface = notify
 }
 
-// Interfaces names every interface, in order.
+// Interfaces names every interface in the order it was added, lo first.
 func (nm *NetworkManager) Interfaces() []string {
 	nm.mu.RLock()
 	defer nm.mu.RUnlock()
-	return slices.Sorted(maps.Keys(nm.interfaces))
+	return slices.Clone(nm.order)
+}
+
+// AddAddress is ip addr add ADDR dev DEVICE. Like Linux it also routes the
+// address's subnet through the device, so 192.168.1.5/24 on eth0 brings
+// 192.168.1.0/24 dev eth0 with it.
+func (nm *NetworkManager) AddAddress(device string, addr netip.Prefix) error {
+	nm.mu.Lock()
+	defer nm.mu.Unlock()
+	return nm.addAddress(device, addr)
+}
+
+func (nm *NetworkManager) addAddress(device string, addr netip.Prefix) error {
+	if _, ok := nm.interfaces[device]; !ok {
+		return ErrNoDevice
+	}
+	if !addr.IsValid() {
+		return ErrInvalid
+	}
+	if slices.Contains(nm.addrs[device], addr) {
+		return ErrExists
+	}
+	nm.addrs[device] = append(nm.addrs[device], addr)
+	if err := nm.addRoute(addr.Masked(), device); err != nil && !errors.Is(err, ErrExists) {
+		return err
+	}
+	return nil
+}
+
+// Addresses are the addresses on device, in the order they were added.
+func (nm *NetworkManager) Addresses(device string) ([]netip.Prefix, error) {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	if _, ok := nm.interfaces[device]; !ok {
+		return nil, ErrNoDevice
+	}
+	return slices.Clone(nm.addrs[device]), nil
+}
+
+// Routes is the routing table, longest prefix first.
+func (nm *NetworkManager) Routes() []Route {
+	nm.mu.RLock()
+	defer nm.mu.RUnlock()
+	return slices.Clone(nm.routes)
 }
 
 func (nm *NetworkManager) SetLinkUp(name string, up bool) error {
@@ -109,18 +159,25 @@ func (nm *NetworkManager) LinkUp(name string) (bool, error) {
 func (nm *NetworkManager) AddRoute(prefix netip.Prefix, device string) error {
 	nm.mu.Lock()
 	defer nm.mu.Unlock()
+	return nm.addRoute(prefix, device)
+}
+
+func (nm *NetworkManager) addRoute(prefix netip.Prefix, device string) error {
 	if _, ok := nm.interfaces[device]; !ok {
 		return ErrNoDevice
 	}
 	prefix = prefix.Masked()
+	if slices.Contains(nm.routes, Route{prefix, device}) {
+		return ErrExists // ip route add refuses a route it already has
+	}
 	at := len(nm.routes)
 	for i, r := range nm.routes {
-		if prefix.Bits() > r.prefix.Bits() {
+		if prefix.Bits() > r.Prefix.Bits() {
 			at = i
 			break
 		}
 	}
-	nm.routes = append(nm.routes[:at], append([]route{{prefix, device}}, nm.routes[at:]...)...)
+	nm.routes = slices.Insert(nm.routes, at, Route{prefix, device})
 	return nil
 }
 
@@ -140,8 +197,8 @@ func (nm *NetworkManager) routeTo(ip netip.Addr) (Network, error) {
 	}
 	ip = ip.Unmap()
 	for _, r := range nm.routes {
-		if r.prefix.Contains(ip) && nm.up[r.device] {
-			return nm.interfaces[r.device], nil
+		if r.Prefix.Contains(ip) && nm.up[r.Device] {
+			return nm.interfaces[r.Device], nil
 		}
 	}
 	return nil, ErrNetUnreachable

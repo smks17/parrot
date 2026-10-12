@@ -34,6 +34,7 @@ var (
 	ErrIsConnected  = errors.New("transport endpoint is already connected")
 	ErrNotConnected = errors.New("transport endpoint is not connected")
 	ErrAddrInUse    = errors.New("address already in use")
+	ErrExists       = errors.New("file exists") // EEXIST, what ip says of an address or route it already has
 	ErrInvalid      = errors.New("invalid argument")
 
 	ErrNetUnreachable = errors.New("network is unreachable")

@@ -52,11 +52,17 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-// attachHostNetwork plugs the host's own network into the machine as eth0 and
-// sends everything lo does not cover through it
+// attachHostNetwork plugs the host's own network into the machine as eth0, with
+// the host's address on it, and sends everything lo does not cover through it
 func attachHostNetwork(app *engine.App) error {
 	nm := app.Network()
 	nm.AddInterface("eth0", hostnet.Net{})
+	// A host with no network yet still gets eth0, only without an address.
+	if addr, err := hostnet.Addr(); err == nil {
+		if err := nm.AddAddress("eth0", addr); err != nil {
+			return err
+		}
+	}
 	return nm.SetDefaultRoute("eth0")
 }
 

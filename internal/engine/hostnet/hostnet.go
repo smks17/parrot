@@ -84,3 +84,31 @@ func translate(err error) error {
 	}
 	return err
 }
+
+// Addr is the host's address on the network its default route leads to
+func Addr() (netip.Prefix, error) {
+	probe, err := net.Dial("udp", "192.0.2.1:9") // TEST-NET-1: never answered, always routed by default
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	local := probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap()
+	probe.Close()
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(ipnet.IP)
+		if !ok || ip.Unmap() != local {
+			continue
+		}
+		bits, _ := ipnet.Mask.Size()
+		return netip.PrefixFrom(local, bits), nil
+	}
+	return netip.PrefixFrom(local, local.BitLen()), nil // the host never said; take the address alone
+}
