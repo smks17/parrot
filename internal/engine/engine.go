@@ -26,7 +26,11 @@ type App struct {
 	network    *network.NetworkManager
 }
 
-func NewApp() *App { return &App{session: NewSession(), network: newNetwork()} }
+func NewApp() *App {
+	app := &App{session: NewSession(), network: newNetwork()}
+	app.session.shell.Network = app.network
+	return app
+}
 
 func newNetwork() *network.NetworkManager {
 	nm := network.NewNetworkManager(context.Background())
@@ -61,7 +65,9 @@ func NewAppOn(fsys filesystem.FS) *App {
 	vars := session.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
-	return &App{session: session, network: newNetwork()}
+	app := &App{session: session, network: newNetwork()}
+	session.shell.Network = app.network
+	return app
 }
 
 func (app *App) Snapshot() ([]byte, error) {
@@ -74,6 +80,7 @@ func (app *App) Restore(data []byte) error {
 		return err
 	}
 	session.shell.SetYield(app.tick)
+	session.shell.Network = app.network
 	session.background = app.background
 	session.setOutput(app.background.out, app.background.errOut)
 	// The old session's jobs have nowhere to write now, so close them. The new session's jobs will write to the new background.

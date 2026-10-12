@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/proc"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -50,6 +51,8 @@ type Context struct {
 
 	// JobProcessGroup turns a job reference such as %1 into the job's process group.
 	JobProcessGroup func(jobReference string) (proc.PID, error)
+
+	Network network.Network
 }
 
 // Interrupted reports whether the user has asked for the running command to stop.

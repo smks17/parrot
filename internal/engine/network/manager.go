@@ -12,7 +12,8 @@ type NetworkManager struct {
 
 	mu         sync.RWMutex
 	interfaces map[string]Network
-	routes     []route // longest prefix first, so the first match is the one to use
+	routes     []route    // longest prefix first, so the first match is the one to use
+	published  []Listener // the outside listeners of published ports
 	down       bool
 
 	ctx      context.Context
@@ -125,6 +126,44 @@ func (nm *NetworkManager) Listen(ip netip.Addr, port uint16, backlog int) (Liste
 	return iface.Listen(ip, port, backlog)
 }
 
+// Publish is peers that connects then in outside are forwarded to port on this machine's lo.
+func (nm *NetworkManager) Publish(outside Network, outsideIP netip.Addr, outsidePort, port uint16) error {
+	listener, err := outside.Listen(outsideIP, outsidePort, 128)
+	if err != nil {
+		return err
+	}
+	nm.mu.Lock()
+	nm.published = append(nm.published, listener)
+	nm.mu.Unlock()
+
+	// Ends when takeDown closes the listener.
+	go func() {
+		for {
+			peer, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go nm.forward(peer, port)
+		}
+	}()
+	return nil
+}
+
+// forward outside peer to port inside
+func (nm *NetworkManager) forward(peer Conn, port uint16) {
+	defer peer.Close()
+	target, err := nm.LO.Connect(netip.Addr{}, 0, netip.MustParseAddr("127.0.0.1"), port)
+	if err != nil {
+		return // nobody listening inside: the peer is hung up on
+	}
+	defer target.Close()
+	go func() {
+		io.Copy(target, peer)
+		target.CloseWrite()
+	}()
+	io.Copy(peer, target)
+}
+
 // TODO: Later use systemd
 func (nm *NetworkManager) Start() {
 	go func() {
@@ -149,7 +188,12 @@ func (nm *NetworkManager) takeDown() {
 	for _, iface := range nm.interfaces {
 		interfaces = append(interfaces, iface)
 	}
+	published := nm.published
+	nm.published = nil
 	nm.mu.Unlock()
+	for _, listener := range published {
+		listener.Close()
+	}
 	for _, iface := range interfaces {
 		if closer, ok := iface.(io.Closer); ok {
 			closer.Close()

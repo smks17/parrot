@@ -11,6 +11,7 @@ import (
 
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/proc"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -56,6 +57,10 @@ type Shell struct {
 	// shell on the real filesystem reaches the programs installed on the
 	// machine; the browser leaves it nil and has none.
 	Fallback func(name string) (commands.Command, bool)
+
+	// Network is the machine's network, handed to every command. The engine
+	// sets it; a shell without one gives its commands none.
+	Network network.Network
 }
 
 type control int
@@ -407,6 +412,7 @@ func (sh *Shell) context(fds *stream.FDTable) *commands.Context {
 		Proc:            sh.procHandler,
 		Self:            sh.proc,
 		JobProcessGroup: sh.jobProcessGroup,
+		Network:         sh.Network,
 	}
 }
 
