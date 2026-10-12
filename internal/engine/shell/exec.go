@@ -44,14 +44,15 @@ type Shell struct {
 	user       user.Identity
 	SwitchUser func(name, password string) error
 
-	proc        *proc.Process // the shell's process, every command's parent
-	procHandler *proc.Table
-	pid         proc.PID       // the shell's own PID, $$
-	lastBG      proc.PID       // the last job started with &, $!
-	job         *job           // the job commands run in now; nil between command lines
-	jobs        []*job         // background and stopped jobs, until wait, fg or jobs collects them
-	pipes       []*stream.File // a pipeline stage's pipe ends, closed if its command is killed
-	lastProcess *proc.Process  // the last process this shell started
+	proc               *proc.Process // the shell's process, every command's parent
+	procHandler        *proc.Table
+	pid                proc.PID       // the shell's own PID, $$
+	lastBG             proc.PID       // the last job started with &, $!
+	job                *job           // the job commands run in now; nil between command lines
+	jobs               []*job         // background and stopped jobs, until wait, fg or jobs collects them
+	pipes              []*stream.File // a pipeline stage's pipe ends, closed if its command is killed
+	lastProcess        *proc.Process  // the last process this shell started
+	substitutionStatus int            // the status of the last $(...) in the command being expanded
 
 	// Fallback is asked for a command the shell does not have. It is how a
 	// shell on the real filesystem reaches the programs installed on the
@@ -269,6 +270,7 @@ func (sh *Shell) stopLoop() bool {
 }
 
 func (sh *Shell) runSimple(cmd *Simple, fds *stream.FDTable) int {
+	sh.substitutionStatus = 0
 	args, err := sh.expandWords(cmd.Words, fds)
 	if err != nil {
 		return sh.fail(fds, err)
@@ -282,7 +284,9 @@ func (sh *Shell) runSimple(cmd *Simple, fds *stream.FDTable) int {
 		sh.vars[assign.Name] = value
 	}
 	if len(args) == 0 {
-		return sh.setStatus(0) // the command was only assignments
+		// Only assignments: as in bash, the status is that of the last
+		// $(...) among them, so "x=$(false)" fails. With none, 0.
+		return sh.setStatus(sh.substitutionStatus)
 	}
 
 	redirected, err := sh.redirect(cmd.Redirs, fds)
@@ -400,7 +404,7 @@ func (sh *Shell) context(fds *stream.FDTable) *commands.Context {
 	}
 	return &commands.Context{
 		Ctx:             sh.ctx,
-		VFS:             sh.fs,
+		VFS:             viewFor(sh.fs, fds),
 		Fds:             fds,
 		Stdin:           guard.WrapReader(fds.Stdin()),
 		Stdout:          guard.WrapWriter(fds.Stdout()),
@@ -463,8 +467,10 @@ func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTab
 			return fds, err
 		}
 
+		// Opened on behalf of the table being built, so "> /dev/stderr" after
+		// "2>&1" sees what the redirects before it left, left to right as in sh.
 		if redirect.Op == "<" {
-			file, err := sh.fs.Open(name, stream.O_RDONLY)
+			file, err := sh.fs.OpenFor(name, stream.O_RDONLY, fds)
 			if err != nil {
 				return fds, fmt.Errorf("%s: %v", name, err)
 			}
@@ -476,7 +482,7 @@ func (sh *Shell) redirect(redirs []Redirect, fds *stream.FDTable) (*stream.FDTab
 		if strings.HasSuffix(redirect.Op, ">>") {
 			flags = stream.O_WRONLY | stream.O_CREATE | stream.O_APPEND
 		}
-		file, err := sh.fs.Open(name, flags)
+		file, err := sh.fs.OpenFor(name, flags, fds)
 		if err != nil {
 			return fds, fmt.Errorf("%s: %v", name, err)
 		}

@@ -9,6 +9,7 @@ import (
 
 	"parrot/internal/engine/clock"
 	"parrot/internal/engine/commands"
+	"parrot/internal/engine/dev"
 	"parrot/internal/engine/filesystem"
 	"parrot/internal/engine/network"
 	"parrot/internal/engine/shell"
@@ -112,6 +113,7 @@ func NewSession() *Session { return newSession(vfs.New()) }
 func newSession(filesystem *vfs.VFS) *Session {
 	s := &Session{fs: filesystem, shell: shell.New(filesystem, nil), stdout: stream.NewBuffer(), stderr: stream.NewBuffer()}
 	s.shell.SwitchUser = s.SwitchUser
+	_ = filesystem.MakeDevice("/dev/tty", dev.NewTerminal(strings.NewReader(""), s.stdout), 0666)
 	resident, err := filesystem.UsersDB().Resident()
 	if err != nil || s.SetUser(resident.Name) != nil {
 		s.SetUser(user.RootName)
