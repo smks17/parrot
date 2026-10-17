@@ -14,7 +14,6 @@ var (
 	ErrRootRemove  = errors.New("cannot remove root directory")
 	ErrPermission  = errors.New("permission denied")
 	ErrNotOwner    = errors.New("operation not permitted")
-	ErrInvalid     = errors.New("invalid argument")
 	ErrLinkDir     = errors.New("hard link not allowed for directory")
 	ErrNotRegular  = errors.New("not a regular file")
 
@@ -25,4 +24,6 @@ var (
 	ErrNotImplemented = stream.ErrNotImplemented
 	ErrBrokenPipe     = stream.ErrBrokenPipe
 	ErrNoProcess      = stream.ErrNoProcess
+	ErrIllegalSeek    = stream.ErrIllegalSeek
+	ErrInvalid        = stream.ErrInvalid
 )

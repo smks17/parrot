@@ -10,4 +10,6 @@ var (
 	ErrIsDir          = errors.New("is a directory")
 	ErrNotImplemented = errors.New("not implemented")
 	ErrNoProcess      = errors.New("no such device or address")
+	ErrIllegalSeek    = errors.New("illegal seek")
+	ErrInvalid        = errors.New("invalid argument")
 )
