@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/proc"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -50,6 +51,17 @@ type Context struct {
 
 	// JobProcessGroup turns a job reference such as %1 into the job's process group.
 	JobProcessGroup func(jobReference string) (proc.PID, error)
+
+	Network *network.NetworkManager
+}
+
+// NewSocket is socket(2) for this command: the socket belongs to its process
+// and is closed when the process ends, so a kill or Ctrl-C wakes a read or an
+// accept waiting on it, and one left open at exit is not leaked.
+func (c *Context) NewSocket() *network.Socket {
+	sock := network.NewSocket(c.Network)
+	sock.CloseWhenDone(c.Ctx)
+	return sock
 }
 
 // Interrupted reports whether the user has asked for the running command to stop.

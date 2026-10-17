@@ -11,6 +11,7 @@ import (
 	"parrot/internal/engine/commands"
 	"parrot/internal/engine/dev"
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/shell"
 	"parrot/internal/engine/stream"
 	"parrot/internal/engine/user"
@@ -23,9 +24,25 @@ type App struct {
 	session    *Session
 	tick       func()
 	background output
+	network    *network.NetworkManager
 }
 
-func NewApp() *App { return &App{session: NewSession()} }
+func NewApp() *App {
+	session := NewSession()
+	app := &App{session: session, network: newNetwork(&session.fs)}
+	app.session.shell.Network = app.network
+	app.seedSys()
+	return app
+}
+
+func newNetwork(fs *filesystem.FS) *network.NetworkManager {
+	nm := network.NewNetworkManager(context.Background(), fs)
+	nm.Start()
+	return nm
+}
+
+// Network is the machine's network, for the host to plug interfaces into.
+func (app *App) Network() *network.NetworkManager { return app.network }
 
 // SetYield installs the host's hook for giving its event loop a turn.
 func (app *App) SetYield(tick func()) {
@@ -51,7 +68,10 @@ func NewAppOn(fsys filesystem.FS) *App {
 	vars := session.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
-	return &App{session: session}
+	app := &App{session: session, network: newNetwork(&session.fs)}
+	session.shell.Network = app.network
+	app.seedSys()
+	return app
 }
 
 func (app *App) Snapshot() ([]byte, error) {
@@ -64,12 +84,14 @@ func (app *App) Restore(data []byte) error {
 		return err
 	}
 	session.shell.SetYield(app.tick)
+	session.shell.Network = app.network
 	session.background = app.background
 	session.setOutput(app.background.out, app.background.errOut)
 	// The old session's jobs have nowhere to write now, so close them. The new session's jobs will write to the new background.
 	app.session.stdout.Close()
 	app.session.stderr.Close()
 	app.session = session
+	app.seedSys() // a snapshot holds no /sys
 	return nil
 }
 

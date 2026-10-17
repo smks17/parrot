@@ -5,20 +5,35 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 
 	"parrot/internal/engine"
+	"parrot/internal/engine/hostnet"
 	"parrot/internal/engine/osfs"
 )
 
 func main() {
 	onDisk := flag.Bool("real", false, "work on the real filesystem instead of the in-memory one")
+	hostNetwork := flag.Bool("net", false, "give the machine the host's network as eth0")
+	var published publishFlags
+	flag.Var(&published, "p", "publish a port: `[hostIP:]hostPort:port` (repeatable; hostIP defaults to 127.0.0.1)")
 	flag.Usage = usage
 	flag.Parse()
 
 	app, err := start(*onDisk)
+	if err == nil && *hostNetwork {
+		err = attachHostNetwork(app)
+	}
+	for _, spec := range published {
+		if err != nil {
+			break
+		}
+		err = publish(app, spec)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		os.Exit(1)
@@ -33,8 +48,56 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s [-real] [script [args...]]\n\n", engine.ShellName)
+	fmt.Fprintf(os.Stderr, "usage: %s [-real] [-net] [-p [hostIP:]hostPort:port]... [script [args...]]\n\n", engine.ShellName)
 	flag.PrintDefaults()
+}
+
+// attachHostNetwork plugs the host's own network into the machine as eth0, with
+// the host's address on it, and sends everything lo does not cover through it
+func attachHostNetwork(app *engine.App) error {
+	nm := app.Network()
+	nm.AddInterface("eth0", hostnet.Net{})
+	// A host with no network yet still gets eth0, only without an address.
+	if addr, err := hostnet.Addr(); err == nil {
+		if err := nm.AddAddress("eth0", addr); err != nil {
+			return err
+		}
+	}
+	return nm.SetDefaultRoute("eth0")
+}
+
+// publishFlags collects every -p, so a port can be published more than once.
+type publishFlags []string
+
+func (p *publishFlags) String() string     { return strings.Join(*p, ",") }
+func (p *publishFlags) Set(v string) error { *p = append(*p, v); return nil }
+
+func publish(app *engine.App, spec string) error {
+	parts := strings.Split(spec, ":")
+	hostIP := "127.0.0.1"
+	switch len(parts) {
+	case 2:
+	case 3:
+		hostIP, parts = parts[0], parts[1:]
+	default:
+		return fmt.Errorf("-p %s: want [hostIP:]hostPort:port", spec)
+	}
+	ip, err := netip.ParseAddr(hostIP)
+	if err != nil {
+		return fmt.Errorf("-p %s: invalid host IP %q", spec, hostIP)
+	}
+	hostPort, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		return fmt.Errorf("-p %s: invalid host port %q", spec, parts[0])
+	}
+	port, err := strconv.ParseUint(parts[1], 10, 16)
+	if err != nil {
+		return fmt.Errorf("-p %s: invalid port %q", spec, parts[1])
+	}
+	if err := app.Network().Publish(hostnet.Net{}, ip, uint16(hostPort), uint16(port)); err != nil {
+		return fmt.Errorf("-p %s: %w", spec, err)
+	}
+	return nil
 }
 
 // start builds the shell over whichever filesystem was asked for.

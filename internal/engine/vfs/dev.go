@@ -5,7 +5,10 @@ import (
 	"parrot/internal/engine/filesystem"
 )
 
-const devDir = "dev"
+const (
+	devDir = "dev"
+	sysDir = "sys"
+)
 
 func seedDev(root *Inode) {
 	devices := []struct {

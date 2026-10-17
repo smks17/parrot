@@ -235,6 +235,12 @@ func (f *VFS) OpenFor(p string, flags stream.OpenFlags, fds *stream.FDTable) (*s
 		return stream.OpenFile(node, flags)
 	case dev.Descriptor:
 		return f.reopen(device, flags, need, fds)
+	case dev.Generated:
+		// Even root cannot write an attribute the kernel keeps no store for.
+		if flags.Writable() {
+			return nil, filesystem.ErrPermission
+		}
+		return stream.NewDeviceFile(device.Open(), flags), nil
 	default:
 		return stream.NewDeviceFile(device, flags), nil
 	}
@@ -271,6 +277,29 @@ func (f *VFS) MakeDevice(p string, device dev.Device, perm filesystem.FileMode) 
 		}
 	}
 	return parent.Link(name, NewDevice(device, rootOwner(), perm))
+}
+
+// MakeDirAll makes p and every directory missing on the way, owned by root
+// and with no permission check: it is the kernel making sysfs, not a user.
+func (f *VFS) MakeDirAll(p string) error {
+	dir := f.root
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" {
+			continue
+		}
+		next, ok := dir.Lookup(seg)
+		if !ok {
+			next = NewDir(rootOwner())
+			if err := dir.Link(seg, next); err != nil {
+				return err
+			}
+		}
+		if !next.IsDir() {
+			return filesystem.ErrNotDir
+		}
+		dir = next
+	}
+	return nil
 }
 
 func (f *VFS) create(p string, node *Inode) error {
