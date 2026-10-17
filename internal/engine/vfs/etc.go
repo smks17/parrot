@@ -4,6 +4,7 @@ import (
 	"path"
 
 	"parrot/internal/engine/filesystem"
+	"parrot/internal/engine/network"
 	"parrot/internal/engine/user"
 )
 
@@ -15,6 +16,8 @@ func seedEtc(root *Inode) {
 		{path.Base(user.PasswdPath), user.DefaultPasswd, 0644},
 		{path.Base(user.GroupPath), user.DefaultGroup, 0644},
 		{path.Base(user.ShadowPath), user.DefaultShadow, 0600},
+		{path.Base(network.HostsPath), network.DefaultHosts, 0644},
+		{path.Base(network.ConfPath), network.DefaultConf, 0644},
 	}
 
 	if !root.IsDir() {

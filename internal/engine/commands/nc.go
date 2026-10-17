@@ -66,19 +66,19 @@ func (nc Nc) Run(ctx *Context, args []string) int {
 }
 
 func (nc Nc) connect(ctx *Context, host string, port uint16) (*network.Socket, error) {
-	ip, err := netip.ParseAddr(host)
-	if host == "localhost" {
-		ip, err = netip.MustParseAddr("127.0.0.1"), nil
-	}
+	addrs, err := ctx.Network.Resolver.Resolve(ctx.Ctx, host)
 	if err != nil {
-		return nil, fmt.Errorf("%s: invalid address", host)
+		return nil, fmt.Errorf("getaddrinfo for host %q port %d: %w", host, port, err)
 	}
-	sock := ctx.NewSocket()
-	if err := sock.Connect(ip, port); err != nil {
+	for _, ip := range addrs {
+		sock := network.NewSocket(ctx.Network)
+		if err = sock.Connect(netip.MustParseAddr(ip.String()), port); err == nil {
+			return sock, nil
+		}
 		sock.Close()
-		return nil, fmt.Errorf("connect to %s port %d: %w", ip, port, err)
+		err = fmt.Errorf("connect to %s port %d: %w", ip, port, err)
 	}
-	return sock, nil
+	return nil, err
 }
 
 func (nc Nc) accept(ctx *Context, port uint16) (*network.Socket, error) {

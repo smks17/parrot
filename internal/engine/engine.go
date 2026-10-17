@@ -28,14 +28,15 @@ type App struct {
 }
 
 func NewApp() *App {
-	app := &App{session: NewSession(), network: newNetwork()}
+	session := NewSession()
+	app := &App{session: session, network: newNetwork(&session.fs)}
 	app.session.shell.Network = app.network
 	app.seedSys()
 	return app
 }
 
-func newNetwork() *network.NetworkManager {
-	nm := network.NewNetworkManager(context.Background())
+func newNetwork(fs *filesystem.FS) *network.NetworkManager {
+	nm := network.NewNetworkManager(context.Background(), fs)
 	nm.Start()
 	return nm
 }
@@ -67,7 +68,7 @@ func NewAppOn(fsys filesystem.FS) *App {
 	vars := session.shell.Vars()
 	vars[commands.EnvUser] = id.Name
 	vars[commands.EnvHome] = id.Home
-	app := &App{session: session, network: newNetwork()}
+	app := &App{session: session, network: newNetwork(&session.fs)}
 	session.shell.Network = app.network
 	app.seedSys()
 	return app

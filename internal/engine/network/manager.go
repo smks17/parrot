@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/netip"
+	"parrot/internal/engine/filesystem"
 	"slices"
 	"sync"
 )
@@ -20,6 +21,7 @@ type NetworkManager struct {
 	routes     []Route                   // longest prefix first, so the first match is the one to use
 	published  []Listener                // the outside listeners of published ports
 	down       bool
+	Resolver   *resolver
 
 	// onNewInterface is told the name of every interface added, the way the
 	// kernel's netdevice notifier tells sysfs to make its directory.
@@ -39,7 +41,7 @@ type Route struct {
 	Device string
 }
 
-func NewNetworkManager(ctx context.Context) *NetworkManager {
+func NewNetworkManager(ctx context.Context, fs *filesystem.FS) *NetworkManager {
 	lo := NewLO() // one loopback, under both names, or a listener on one is missing from the other
 	nm := &NetworkManager{
 		LO: lo,
@@ -51,6 +53,7 @@ func NewNetworkManager(ctx context.Context) *NetworkManager {
 		addrs:    map[string][]netip.Prefix{},
 		ctx:      ctx,
 		shutdown: make(chan struct{}),
+		Resolver: NewResolver(fs),
 	}
 	// lo's routes come with its addresses, as every interface's do.
 	nm.addAddress("lo", netip.MustParsePrefix("127.0.0.1/8"))
