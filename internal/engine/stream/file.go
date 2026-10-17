@@ -169,7 +169,29 @@ func (f *File) Write(p []byte) (int, error) {
 
 // Seek moves a description's offset.
 func (f *File) Seek(offset int64, whence int) (int64, error) {
-	return 0, ErrNotImplemented
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return 0, ErrBadFD
+	}
+	if f.inode == nil {
+		return 0, ErrIllegalSeek
+	}
+	var base int64 = 0
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		base = f.offset
+	case io.SeekEnd:
+		f.offset = f.inode.Size()
+	default:
+		return 0, ErrInvalid
+	}
+	if base+offset < 0 {
+		return 0, ErrInvalid
+	}
+	f.offset = offset + base
+	return f.offset, nil
 }
 
 // Close drops this description.
