@@ -19,6 +19,8 @@ import (
 func main() {
 	onDisk := flag.Bool("real", false, "work on the real filesystem instead of the in-memory one")
 	hostNetwork := flag.Bool("net", false, "give the machine the host's network as eth0")
+	var loads loadList
+	flag.Var(&loads, "load", "copy a host file into the machine before it starts, as `host:path` (repeatable)")
 	var published publishFlags
 	flag.Var(&published, "p", "publish a port: `[hostIP:]hostPort:port` (repeatable; hostIP defaults to 127.0.0.1)")
 	flag.Usage = usage
@@ -38,6 +40,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
 		os.Exit(1)
 	}
+	if err := loads.into(app); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", engine.ShellName, err)
+		os.Exit(1)
+	}
 	app.SetBackgroundOutput(os.Stdout, os.Stderr)
 
 	// A named file is run as a script, with the rest of the arguments as $1
@@ -47,8 +53,37 @@ func main() {
 	os.Exit(repl(app, *onDisk))
 }
 
+// loadList is the -load flags: host files to copy into the machine. Reading
+// the host is this front end's job, never the engine's, so the engine only
+// ever sees the bytes.
+type loadList []string
+
+func (l *loadList) String() string { return strings.Join(*l, ",") }
+
+func (l *loadList) Set(v string) error {
+	if host, path, ok := strings.Cut(v, ":"); !ok || host == "" || path == "" {
+		return fmt.Errorf("want host:path, got %q", v)
+	}
+	*l = append(*l, v)
+	return nil
+}
+
+func (l loadList) into(app *engine.App) error {
+	for _, v := range l {
+		host, path, _ := strings.Cut(v, ":")
+		data, err := os.ReadFile(host)
+		if err != nil {
+			return err
+		}
+		if result := app.Upload(path, data); result.ExitCode != 0 {
+			return fmt.Errorf("%s", strings.TrimSpace(result.Stderr))
+		}
+	}
+	return nil
+}
+
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s [-real] [-net] [-p [hostIP:]hostPort:port]... [script [args...]]\n\n", engine.ShellName)
+	fmt.Fprintf(os.Stderr, "usage: %s [-real] [-net] [-p [hostIP:]hostPort:port]... [-load host:path]... [script [args...]]\n\n", engine.ShellName)
 	flag.PrintDefaults()
 }
 
